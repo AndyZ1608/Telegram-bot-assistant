@@ -1,119 +1,285 @@
 """
 services/gold_price.py - Gold Price Data Service
 
-Adapter pattern mirroring market_data.py.  Ships with a
-MockGoldProvider returning realistic Vietnamese gold prices.
-
-Usage:
-    provider = get_gold_provider()
-    result = await provider.get_gold_price()
+Gold provider adapter for the Telegram Assistant Bot.
+Supports VNAppMob Gold API v2 and a mock fallback provider.
 """
+
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
+
+import aiohttp
 
 import config
 
 
-# ---------------------------------------------------------------------------
-# Abstract base
-# ---------------------------------------------------------------------------
+AUTH_ERROR_MESSAGE = (
+    "VNAppMob Gold API key đã hết hạn hoặc không hợp lệ. "
+    "Hãy request key mới và cập nhật VNAPPMOB_GOLD_API_KEY trong .env."
+)
+
+
+class GoldProviderError(Exception):
+    """Base exception for gold provider failures."""
+
+
+class GoldAuthError(GoldProviderError):
+    """Raised when the VNAppMob API key is missing, expired, or invalid."""
+
 
 class GoldPriceProvider(ABC):
     """Base interface for gold-price data sources."""
 
     @abstractmethod
-    async def get_gold_price(self) -> Optional[dict]:
-        """Fetch the latest domestic gold prices.
-
-        Returns
-        -------
-        dict or None
-            Keys: sjc_buy, sjc_sell, nhan_buy, nhan_sell,
-                  unit, updated_at, source.
-        """
+    async def get_gold_price(self, source: str | None = None) -> Optional[dict]:
+        """Fetch latest domestic gold prices."""
         pass
 
 
-# ---------------------------------------------------------------------------
-# Mock provider
-# ---------------------------------------------------------------------------
-
 class MockGoldProvider(GoldPriceProvider):
-    """Mock provider with realistic Vietnamese gold prices (VND/lượng)."""
+    """Mock provider with sample Vietnamese gold prices."""
 
-    async def get_gold_price(self) -> Optional[dict]:
-        """Return sample SJC and nhẫn 9999 prices."""
+    async def get_gold_price(self, source: str | None = None) -> Optional[dict]:
+        groups = {
+            "SJC": {
+                "items": [
+                    {"label": "1 lượng", "buy": 92_500_000, "sell": 94_500_000},
+                    {"label": "nhẫn 1 chỉ", "buy": 78_000_000, "sell": 79_500_000},
+                ],
+            },
+            "DOJI": {
+                "items": [
+                    {"label": "HCM", "buy": 92_300_000, "sell": 94_300_000},
+                    {"label": "Hà Nội", "buy": 92_300_000, "sell": 94_300_000},
+                ],
+            },
+            "PNJ": {
+                "items": [
+                    {"label": "HCM", "buy": 78_100_000, "sell": 79_400_000},
+                    {"label": "Hà Nội", "buy": 78_100_000, "sell": 79_400_000},
+                ],
+            },
+        }
+        selected = _normalize_source(source)
+        if selected:
+            groups = {selected: groups[selected]}
+
         return {
-            'sjc_buy': 92_500_000,
-            'sjc_sell': 94_500_000,
-            'nhan_buy': 78_000_000,
-            'nhan_sell': 79_500_000,
-            'unit': 'VND/lượng',
-            'updated_at': datetime.now().strftime('%d/%m/%Y %H:%M'),
-            'source': 'Mock Data (cần cấu hình API thật)',
+            "provider": "mock",
+            "groups": groups,
+            "updated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "source": "Mock/sample data",
+            "is_mock": True,
         }
 
 
-# ---------------------------------------------------------------------------
-# Real provider (placeholder)
-# ---------------------------------------------------------------------------
+class VNAppMobGoldProvider(GoldPriceProvider):
+    """VNAppMob Gold API v2 provider."""
 
-# TODO: Implement a real gold-price provider.  Options include:
-#   - Crawling sjc.com.vn or pnj.com.vn
-#   - Calling a third-party gold-price API
-#   - Using a data service that aggregates Vietnamese precious-metal prices
-#
-# class RealGoldProvider(GoldPriceProvider):
-#     """Fetch live SJC & nhẫn prices from a real data source."""
-#
-#     def __init__(self, api_key: str | None = None):
-#         self.api_key = api_key
-#
-#     async def get_gold_price(self) -> Optional[dict]:
-#         import aiohttp
-#         try:
-#             async with aiohttp.ClientSession() as session:
-#                 async with session.get('https://example.com/api/gold') as resp:
-#                     if resp.status == 200:
-#                         data = await resp.json()
-#                         return {
-#                             'sjc_buy': data['sjc']['buy'],
-#                             'sjc_sell': data['sjc']['sell'],
-#                             'nhan_buy': data['nhan']['buy'],
-#                             'nhan_sell': data['nhan']['sell'],
-#                             'unit': 'VND/lượng',
-#                             'updated_at': datetime.now().strftime('%d/%m/%Y %H:%M'),
-#                             'source': 'Real API',
-#                         }
-#         except Exception:
-#             return await MockGoldProvider().get_gold_price()
+    ENDPOINTS = {
+        "SJC": "/api/v2/gold/sjc",
+        "DOJI": "/api/v2/gold/doji",
+        "PNJ": "/api/v2/gold/pnj",
+    }
+
+    LABEL_KEYS = (
+        "name",
+        "type",
+        "gold_type",
+        "goldType",
+        "brand",
+        "location",
+        "area",
+        "city",
+        "province",
+        "title",
+        "label",
+    )
+    BUY_KEYS = (
+        "buy",
+        "buy_price",
+        "buyPrice",
+        "buying",
+        "buying_price",
+        "buyValue",
+        "price_buy",
+        "mua_vao",
+        "mua",
+    )
+    SELL_KEYS = (
+        "sell",
+        "sell_price",
+        "sellPrice",
+        "selling",
+        "selling_price",
+        "sellValue",
+        "price_sell",
+        "ban_ra",
+        "ban",
+    )
+
+    def __init__(self, api_key: str, base_url: str, timeout: float):
+        self.api_key = api_key.strip()
+        self.base_url = base_url.rstrip("/")
+        self.timeout = timeout
+
+    async def get_gold_price(self, source: str | None = None) -> Optional[dict]:
+        if not self.api_key:
+            raise GoldAuthError(AUTH_ERROR_MESSAGE)
+
+        selected = _normalize_source(source)
+        sources = [selected] if selected else list(self.ENDPOINTS)
+        groups: dict[str, dict[str, Any]] = {}
+        errors: dict[str, str] = {}
+        auth_error = False
+
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Accept": "application/json",
+        }
+
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            for name in sources:
+                try:
+                    items = await self._fetch_source(session, name)
+                    if items:
+                        groups[name] = {"items": items}
+                    else:
+                        errors[name] = "response rỗng hoặc sai format"
+                except GoldAuthError:
+                    auth_error = True
+                    errors[name] = "API key hết hạn hoặc không hợp lệ"
+                except Exception as exc:
+                    errors[name] = str(exc) or "provider lỗi"
+
+        if not groups and auth_error:
+            raise GoldAuthError(AUTH_ERROR_MESSAGE)
+
+        return {
+            "provider": "vnappmob",
+            "groups": groups,
+            "errors": errors,
+            "updated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "source": "VNAppMob Gold API",
+            "is_mock": False,
+        }
+
+    async def _fetch_source(
+        self,
+        session: aiohttp.ClientSession,
+        source_name: str,
+    ) -> list[dict[str, Any]]:
+        url = f"{self.base_url}{self.ENDPOINTS[source_name]}"
+        async with session.get(url) as response:
+            text = await response.text()
+            if response.status == 403 or _looks_like_expired_key(text):
+                raise GoldAuthError(AUTH_ERROR_MESSAGE)
+            if response.status >= 400:
+                raise GoldProviderError(f"HTTP {response.status}")
+            try:
+                payload = await response.json(content_type=None)
+            except Exception as exc:
+                raise GoldProviderError("response JSON không hợp lệ") from exc
+
+        results = payload.get("results") if isinstance(payload, dict) else None
+        if not results:
+            return []
+
+        records = results if isinstance(results, list) else [results]
+        parsed: list[dict[str, Any]] = []
+        for index, record in enumerate(records, start=1):
+            if not isinstance(record, dict):
+                continue
+            item = self._parse_record(record, source_name, index)
+            if item:
+                parsed.append(item)
+        return parsed
+
+    def _parse_record(
+        self,
+        record: dict[str, Any],
+        source_name: str,
+        index: int,
+    ) -> dict[str, Any] | None:
+        buy = _first_present(record, self.BUY_KEYS)
+        sell = _first_present(record, self.SELL_KEYS)
+        if buy in (None, "") and sell in (None, ""):
+            return None
+
+        label = _first_present(record, self.LABEL_KEYS)
+        if not label:
+            label = _derive_label(record, source_name, index)
+
+        return {
+            "label": str(label),
+            "buy": buy,
+            "sell": sell,
+            "unit": record.get("unit") or record.get("price_unit") or "VND",
+        }
 
 
-# ---------------------------------------------------------------------------
-# Factory
-# ---------------------------------------------------------------------------
+def _first_present(record: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        value = record.get(key)
+        if value not in (None, ""):
+            return value
+    return None
 
-class RealGoldProvider(GoldPriceProvider):
-    """Placeholder real provider; falls back to sample data until configured."""
 
-    def __init__(self, api_key: str | None = None):
-        self.api_key = api_key
+def _derive_label(record: dict[str, Any], source_name: str, index: int) -> str:
+    ignored = set(VNAppMobGoldProvider.BUY_KEYS + VNAppMobGoldProvider.SELL_KEYS)
+    ignored |= {"unit", "price_unit", "created_at", "updated_at", "date", "time"}
+    parts = [
+        str(value)
+        for key, value in record.items()
+        if key not in ignored and value not in (None, "")
+    ]
+    if parts:
+        return " - ".join(parts[:2])
+    return f"{source_name} #{index}"
 
-    async def get_gold_price(self) -> Optional[dict]:
-        data = await MockGoldProvider().get_gold_price()
-        if data:
-            data['source'] = f"{data.get('source', 'Mock Data')} (real provider placeholder)"
-        return data
+
+def _looks_like_expired_key(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "expired",
+            "invalid token",
+            "invalid api key",
+            "unauthorized",
+            "forbidden",
+            "api key",
+            "token",
+            "hết hạn",
+            "không hợp lệ",
+        )
+    )
+
+
+def _normalize_source(source: str | None) -> str | None:
+    if not source:
+        return None
+    value = source.strip().upper()
+    aliases = {
+        "SJC": "SJC",
+        "DOJI": "DOJI",
+        "PNJ": "PNJ",
+    }
+    return aliases.get(value)
 
 
 def get_gold_provider() -> GoldPriceProvider:
-    """Return the configured gold-price provider.
-
-    MARKET_PROVIDER=real selects a placeholder real provider that currently
-    falls back to mock/sample data.
-    """
-    if config.MARKET_PROVIDER == 'real':
-        return RealGoldProvider(config.GOLD_API_KEY)
+    """Return the configured gold-price provider."""
+    provider = config.GOLD_PROVIDER.lower()
+    if provider == "vnappmob":
+        return VNAppMobGoldProvider(
+            api_key=config.VNAPPMOB_GOLD_API_KEY,
+            base_url=config.VNAPPMOB_GOLD_BASE_URL,
+            timeout=config.VNAPPMOB_GOLD_TIMEOUT,
+        )
     return MockGoldProvider()

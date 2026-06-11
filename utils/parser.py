@@ -121,7 +121,10 @@ _JAR_UPDATE_KEYWORDS = {
     'doi hu', 'sua hu', 'cap nhat hu',
 }
 _STOCK_KEYWORDS = {'giá cổ phiếu', 'check mã', 'cổ phiếu', 'gia co phieu', 'co phieu'}
-_GOLD_KEYWORDS = {'giá vàng', 'vàng', 'gia vang', 'vang'}
+_GOLD_KEYWORDS = {
+    'giá vàng', 'vàng', 'gia vang', 'vang',
+    'giá sjc', 'gia sjc', 'giá doji', 'gia doji', 'giá pnj', 'gia pnj',
+}
 _SILVER_KEYWORDS = {'giá bạc', 'bạc', 'gia bac', 'bac'}
 _STARTUP_KEYWORDS = {'tin startup', 'startup'}
 
@@ -171,6 +174,23 @@ def _extract_stock_symbol_from_price_query(text: str) -> Optional[str]:
     if 2 <= len(candidate) <= 10:
         return candidate.upper()
     return _extract_stock_symbol(text)
+
+
+def _extract_gold_source(text: str) -> Optional[str]:
+    """Detect source-specific Vietnamese gold queries."""
+    lower = _text_lower(text)
+    if not (
+        lower.startswith('giá ')
+        or lower.startswith('gia ')
+        or 'vàng' in lower
+        or 'vang' in lower
+    ):
+        return None
+
+    for source in ('sjc', 'doji', 'pnj'):
+        if re.search(rf'(?<!\w){source}(?!\w)', lower, flags=re.IGNORECASE):
+            return source
+    return None
 
 
 def _extract_startup_topic(text: str) -> Optional[str]:
@@ -500,6 +520,15 @@ def detect_intent(text: str) -> dict:
                 'amount': amount,
             }
 
+    # --- Gold ---
+    gold_source = _extract_gold_source(text)
+    if gold_source:
+        return {'intent': 'gold', 'source': gold_source}
+
+    for kw in _GOLD_KEYWORDS:
+        if kw in lower:
+            return {'intent': 'gold'}
+
     # --- Stock ---
     for kw in _STOCK_KEYWORDS:
         if kw in lower:
@@ -515,11 +544,6 @@ def detect_intent(text: str) -> dict:
             'intent': 'stock',
             'symbol': stock_symbol,
         }
-
-    # --- Gold ---
-    for kw in _GOLD_KEYWORDS:
-        if kw in lower:
-            return {'intent': 'gold'}
 
     # --- Silver ---
     for kw in _SILVER_KEYWORDS:

@@ -36,6 +36,13 @@ NEWS_API_KEY: str = os.getenv('NEWS_API_KEY', '')
 
 # Providers
 MARKET_PROVIDER: str = os.getenv('MARKET_PROVIDER', 'mock').lower()
+GOLD_PROVIDER: str = os.getenv('GOLD_PROVIDER', 'vnappmob').lower()
+VNAPPMOB_GOLD_API_KEY: str = os.getenv('VNAPPMOB_GOLD_API_KEY', '')
+VNAPPMOB_GOLD_BASE_URL: str = os.getenv('VNAPPMOB_GOLD_BASE_URL', 'https://api.vnappmob.com').rstrip('/')
+VNAPPMOB_GOLD_TIMEOUT: float = float(os.getenv('VNAPPMOB_GOLD_TIMEOUT', '10'))
+VNAPPMOB_AUTO_REFRESH_GOLD_KEY: bool = (
+    os.getenv('VNAPPMOB_AUTO_REFRESH_GOLD_KEY', 'false').lower() in {'1', 'true', 'yes', 'on'}
+)
 STARTUP_NEWS_PROVIDER: str = os.getenv('STARTUP_NEWS_PROVIDER', 'mock').lower()
 STARTUP_CACHE_TTL_MINUTES: int = int(os.getenv('STARTUP_CACHE_TTL_MINUTES', '60'))
 ENABLE_SCHEDULER: bool = os.getenv('ENABLE_SCHEDULER', 'true').lower() in {'1', 'true', 'yes', 'on'}

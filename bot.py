@@ -39,7 +39,7 @@ from services.accounting_service import (
     update_expense,
     update_jar,
 )
-from services.gold_price import get_gold_provider
+from services.gold_price import AUTH_ERROR_MESSAGE, GoldAuthError, get_gold_provider
 from services.investment_service import (
     AlertNotFoundError,
     DuplicateSymbolError,
@@ -612,10 +612,74 @@ async def _send_stock(update: Update, data: dict | None, symbol: str) -> None:
     )
 
 
-async def gold_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _telegram_user_id(update)
+def _format_gold_value(value: object) -> str:
+    if value in (None, ""):
+        return "chưa có dữ liệu"
+    if isinstance(value, (int, float)):
+        return format_currency(float(value))
+
+    raw = str(value).strip()
+    if not raw:
+        return "chưa có dữ liệu"
+
+    compact = raw.replace(" ", "")
+    separators = compact.count(".") + compact.count(",")
+    if separators == 1:
+        sep = "." if "." in compact else ","
+        after_sep = compact.rsplit(sep, 1)[-1]
+        if len(after_sep) <= 2:
+            return raw
+
+    numeric = compact.replace(".", "").replace(",", "")
+    if numeric.isdigit():
+        return format_currency(float(numeric))
+    return raw
+
+
+def _format_gold_response(data: dict, source_filter: str | None = None) -> str:
+    groups = data.get("groups") or {}
+    errors = data.get("errors") or {}
+    lines = ["Giá vàng hôm nay", ""]
+    order = [source_filter.upper()] if source_filter else ["SJC", "DOJI", "PNJ"]
+
+    has_item = False
+    for group_name in order:
+        group = groups.get(group_name)
+        items = group.get("items", []) if isinstance(group, dict) else []
+        if not items and group_name not in errors:
+            continue
+
+        lines.append(f"{group_name}:")
+        if items:
+            has_item = True
+            for item in items:
+                label = item.get("label") or group_name
+                buy = _format_gold_value(item.get("buy"))
+                sell = _format_gold_value(item.get("sell"))
+                lines.append(f"- {label}: mua vào {buy}, bán ra {sell}")
+        if group_name in errors and not items:
+            lines.append(f"- lỗi nguồn: {errors[group_name]}")
+        lines.append("")
+
+    if not has_item:
+        return "Không có dữ liệu giá vàng."
+
+    lines.extend([
+        f"Nguồn: {data.get('source', 'N/A')}",
+        f"Cập nhật: {data.get('updated_at', 'N/A')}",
+        "Không phải khuyến nghị đầu tư.",
+    ])
+    if data.get("is_mock"):
+        lines.append("Ghi chú: mock/sample data.")
+    return "\n".join(lines).strip()
+
+
+async def _send_gold(update: Update, source_filter: str | None = None) -> None:
     try:
-        data = await get_gold_provider().get_gold_price()
+        data = await get_gold_provider().get_gold_price(source_filter)
+    except GoldAuthError:
+        await _message(update).reply_text(AUTH_ERROR_MESSAGE)
+        return
     except Exception:
         logger.exception("Gold provider failed")
         await _message(update).reply_text("Provider giá vàng đang lỗi. Vui lòng thử lại sau.")
@@ -624,19 +688,14 @@ async def gold_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not data:
         await _message(update).reply_text("Không có dữ liệu giá vàng.")
         return
-    await _message(update).reply_text(
-        "\n".join([
-            "Giá vàng",
-            f"SJC mua vào: {format_currency(data.get('sjc_buy', 0))}",
-            f"SJC bán ra: {format_currency(data.get('sjc_sell', 0))}",
-            f"Nhẫn mua vào: {format_currency(data.get('nhan_buy', 0))}",
-            f"Nhẫn bán ra: {format_currency(data.get('nhan_sell', 0))}",
-            f"Đơn vị: {data.get('unit', 'N/A')}",
-            f"Cập nhật: {data.get('updated_at', 'N/A')}",
-            f"Nguồn: {data.get('source', 'Mock/sample data')}",
-            "Không phải khuyến nghị đầu tư.",
-        ])
-    )
+    await _message(update).reply_text(_format_gold_response(data, source_filter))
+
+
+async def gold_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _telegram_user_id(update)
+    args = context.args or []
+    source_filter = args[0].lower() if args and args[0].lower() in {"sjc", "doji", "pnj"} else None
+    await _send_gold(update, source_filter)
 
 
 async def silver_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1313,7 +1372,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     if kind == "gold":
-        await gold_command(update, context)
+        await _send_gold(update, intent.get("source"))
         return
 
     if kind == "silver":
