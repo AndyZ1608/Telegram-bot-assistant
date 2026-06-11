@@ -1,0 +1,25 @@
+[Unit]
+Description=Telegram Assistant Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=telegrambot
+Group=telegrambot
+WorkingDirectory=/opt/telegram-bot-assistant
+EnvironmentFile=/opt/telegram-bot-assistant/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/telegram-bot-assistant/.venv/bin/python /opt/telegram-bot-assistant/bot.py
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+# Keep secrets out of command line. TELEGRAM_BOT_TOKEN is loaded from .env.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=telegram-assistant-bot
+
+[Install]
+WantedBy=multi-user.target

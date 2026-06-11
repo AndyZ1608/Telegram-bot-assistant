@@ -1,0 +1,21 @@
+# Telegram Bot Framework
+python-telegram-bot[job-queue]~=21.6
+
+# Database
+SQLAlchemy[asyncio]~=2.0
+aiosqlite~=0.20.0
+
+# Environment
+python-dotenv~=1.0
+
+# HTTP client for API calls
+aiohttp~=3.10
+
+# Vietnamese stock market data (optional)
+# vnstock~=3.0
+
+# Timezone support
+pytz~=2024.1
+
+# Lightweight automation scheduler
+APScheduler~=3.10
