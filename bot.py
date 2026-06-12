@@ -617,15 +617,16 @@ def _format_gold_value(value: object) -> str:
     return format_gold_k(value)
 
 
-def _format_gold_table(items: list[dict]) -> str:
+def _format_gold_table(items: list[dict], group_name: str) -> str:
+    label_header = "Loại" if group_name == "SJC" else "Khu vực"
     label_width = max(
         14,
-        min(24, max((len(str(item.get("label") or "")) for item in items), default=0)),
+        min(24, max([len(label_header), *[len(str(item.get("label") or "")) for item in items]])),
     )
     buy_width = max(10, max((len(_format_gold_value(item.get("buy"))) for item in items), default=0))
     sell_width = max(10, max((len(_format_gold_value(item.get("sell"))) for item in items), default=0))
     lines = [
-        f"{'Loại':<{label_width}}  {'Mua vào':>{buy_width}}  {'Bán ra':>{sell_width}}",
+        f"{label_header:<{label_width}}  {'Mua vào':>{buy_width}}  {'Bán ra':>{sell_width}}",
     ]
     for item in items:
         label = str(item.get("label") or "")
@@ -651,7 +652,7 @@ def _format_gold_response(data: dict, source_filter: str | None = None) -> str:
         lines.append(group_name)
         if items:
             has_item = True
-            table = html.escape(_format_gold_table(items))
+            table = html.escape(_format_gold_table(items, group_name))
             lines.append(f"<pre>{table}</pre>")
         if group_name in errors and not items:
             lines.append(html.escape(errors[group_name]))

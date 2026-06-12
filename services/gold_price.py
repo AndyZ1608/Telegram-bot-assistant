@@ -25,18 +25,24 @@ AUTH_ERROR_MESSAGE = (
 
 logger = logging.getLogger(__name__)
 
-GOLD_LABELS = {
-    "1c": "1 chỉ",
-    "1l": "1 lượng",
-    "5c": "5 chỉ",
-    "nhan1c": "Nhẫn 1 chỉ",
+SJC_LABELS = {
+    "1l": "SJC 1L",
+    "5c": "SJC 5C",
+    "1c": "SJC 1C",
+    "nhan1c": "Nhẫn 1C",
     "nutrang_75": "Nữ trang 75",
     "nutrang_99": "Nữ trang 99",
     "nutrang_9999": "Nữ trang 9999",
+    "trangsuc49": "Trang sức 49",
+}
+
+REGION_LABELS = {
     "hcm": "HCM",
     "hn": "Hà Nội",
     "ha_noi": "Hà Nội",
     "hanoi": "Hà Nội",
+    "danang": "Đà Nẵng",
+    "da_nang": "Đà Nẵng",
 }
 
 DIRECT_BUY_KEYS = (
@@ -108,8 +114,8 @@ class MockGoldProvider(GoldPriceProvider):
         groups = {
             "SJC": {
                 "items": [
-                    {"label": "1 lượng", "buy": 92_500_000, "sell": 94_500_000},
-                    {"label": "nhẫn 1 chỉ", "buy": 78_000_000, "sell": 79_500_000},
+                    {"label": "SJC 1L", "buy": 92_500_000, "sell": 94_500_000},
+                    {"label": "Nhẫn 1C", "buy": 78_000_000, "sell": 79_500_000},
                 ],
             },
             "DOJI": {
@@ -215,16 +221,14 @@ class VNAppMobGoldProvider(GoldPriceProvider):
         results = payload.get("results") if isinstance(payload, dict) else None
         if not results:
             logger.warning(
-                "VNAppMob %s returned empty results; status=%s payload_keys=%s",
+                "VNAppMob %s returned empty results; status=%s result_count=0 first_item_keys=[]",
                 source_name,
                 status,
-                _safe_keys(payload),
             )
             return []
 
         records = results if isinstance(results, list) else [results]
         parsed: list[dict[str, Any]] = []
-        skipped_keys: list[list[str]] = []
         for index, record in enumerate(records, start=1):
             if not isinstance(record, dict):
                 continue
@@ -235,16 +239,14 @@ class VNAppMobGoldProvider(GoldPriceProvider):
                     items = [direct_item]
             if items:
                 parsed.extend(items)
-            else:
-                skipped_keys.append(list(record.keys()))
 
         if not parsed:
             logger.warning(
-                "VNAppMob %s returned results but no price pairs could be parsed; status=%s payload_keys=%s result_keys=%s",
+                "VNAppMob %s returned results but no price pairs could be parsed; status=%s result_count=%s first_item_keys=%s",
                 source_name,
                 status,
-                _safe_keys(payload),
-                skipped_keys[:3],
+                len(records),
+                list(records[0].keys()) if records and isinstance(records[0], dict) else [],
             )
         return parsed
 
@@ -253,7 +255,7 @@ class VNAppMobGoldProvider(GoldPriceProvider):
         record: dict[str, Any],
         source_name: str,
     ) -> list[dict[str, Any]]:
-        generic_suffixes = {"price", "value", "amount"}
+        generic_suffixes = {"price", "value", "amount", "datetime"}
         key_lookup = {str(key).lower(): key for key in record}
         suffixes = {
             ("prefix", lower_key[4:])
@@ -295,7 +297,7 @@ class VNAppMobGoldProvider(GoldPriceProvider):
                 sell = _get_case_insensitive(record, f"{suffix}_sell")
             if buy in (None, "") and sell in (None, ""):
                 continue
-            label = _gold_label(suffix)
+            label = _gold_label(source_name, suffix)
             if region and region.lower() not in label.lower():
                 label = f"{region} {label}"
             items.append({
@@ -345,8 +347,10 @@ def _get_case_insensitive(record: dict[str, Any], key: str) -> Any:
     return None
 
 
-def _gold_label(suffix: str) -> str:
-    label = GOLD_LABELS.get(suffix.lower())
+def _gold_label(source_name: str, suffix: str) -> str:
+    normalized = suffix.lower()
+    labels = SJC_LABELS if source_name.upper() == "SJC" else REGION_LABELS
+    label = labels.get(normalized)
     if label:
         return label
     return suffix.replace("_", " ").strip().title()
@@ -379,14 +383,9 @@ def _gold_suffix_sort_key(suffix: str) -> tuple[int, str]:
         "nutrang_75": 50,
         "nutrang_99": 60,
         "nutrang_9999": 70,
+        "trangsuc49": 80,
     }
     return order.get(suffix, 999), suffix
-
-
-def _safe_keys(payload: Any) -> list[str]:
-    if isinstance(payload, dict):
-        return list(payload.keys())
-    return [type(payload).__name__]
 
 
 def _looks_like_expired_key(text: str) -> bool:
