@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
+import logging
 from typing import Any, Optional
 
 import aiohttp
@@ -20,6 +21,18 @@ AUTH_ERROR_MESSAGE = (
     "VNAppMob Gold API key đã hết hạn hoặc không hợp lệ. "
     "Hãy request key mới và cập nhật VNAPPMOB_GOLD_API_KEY trong .env."
 )
+
+logger = logging.getLogger(__name__)
+
+GOLD_LABELS = {
+    "1c": "1 chỉ",
+    "1l": "1 lượng",
+    "5c": "5 chỉ",
+    "nhan1c": "nhẫn 1 chỉ",
+    "nutrang_75": "nữ trang 75",
+    "nutrang_99": "nữ trang 99",
+    "nutrang_9999": "nữ trang 9999",
+}
 
 
 class GoldProviderError(Exception):
@@ -84,42 +97,6 @@ class VNAppMobGoldProvider(GoldPriceProvider):
         "DOJI": "/api/v2/gold/doji",
         "PNJ": "/api/v2/gold/pnj",
     }
-
-    LABEL_KEYS = (
-        "name",
-        "type",
-        "gold_type",
-        "goldType",
-        "brand",
-        "location",
-        "area",
-        "city",
-        "province",
-        "title",
-        "label",
-    )
-    BUY_KEYS = (
-        "buy",
-        "buy_price",
-        "buyPrice",
-        "buying",
-        "buying_price",
-        "buyValue",
-        "price_buy",
-        "mua_vao",
-        "mua",
-    )
-    SELL_KEYS = (
-        "sell",
-        "sell_price",
-        "sellPrice",
-        "selling",
-        "selling_price",
-        "sellValue",
-        "price_sell",
-        "ban_ra",
-        "ban",
-    )
 
     def __init__(self, api_key: str, base_url: str, timeout: float):
         self.api_key = api_key.strip()
@@ -189,58 +166,67 @@ class VNAppMobGoldProvider(GoldPriceProvider):
         if not results:
             return []
 
-        records = results if isinstance(results, list) else [results]
-        parsed: list[dict[str, Any]] = []
-        for index, record in enumerate(records, start=1):
-            if not isinstance(record, dict):
-                continue
-            item = self._parse_record(record, source_name, index)
-            if item:
-                parsed.append(item)
+        first_record = results[0] if isinstance(results, list) else results
+        if not isinstance(first_record, dict):
+            logger.warning("VNAppMob %s returned non-object results[0]", source_name)
+            return []
+
+        parsed = self._parse_price_pairs(first_record, source_name)
+        if not parsed:
+            logger.warning(
+                "VNAppMob %s returned results[0] but no buy_*/sell_* price pairs could be parsed",
+                source_name,
+            )
         return parsed
 
-    def _parse_record(
+    def _parse_price_pairs(
         self,
         record: dict[str, Any],
         source_name: str,
-        index: int,
-    ) -> dict[str, Any] | None:
-        buy = _first_present(record, self.BUY_KEYS)
-        sell = _first_present(record, self.SELL_KEYS)
-        if buy in (None, "") and sell in (None, ""):
-            return None
-
-        label = _first_present(record, self.LABEL_KEYS)
-        if not label:
-            label = _derive_label(record, source_name, index)
-
-        return {
-            "label": str(label),
-            "buy": buy,
-            "sell": sell,
-            "unit": record.get("unit") or record.get("price_unit") or "VND",
+    ) -> list[dict[str, Any]]:
+        suffixes = {
+            key[4:]
+            for key, value in record.items()
+            if key.startswith("buy_") and value not in (None, "")
+        }
+        suffixes |= {
+            key[5:]
+            for key, value in record.items()
+            if key.startswith("sell_") and value not in (None, "")
         }
 
+        items: list[dict[str, Any]] = []
+        for suffix in sorted(suffixes, key=_gold_suffix_sort_key):
+            buy = record.get(f"buy_{suffix}")
+            sell = record.get(f"sell_{suffix}")
+            if buy in (None, "") and sell in (None, ""):
+                continue
+            items.append({
+                "label": _gold_label(suffix),
+                "buy": buy,
+                "sell": sell,
+                "unit": record.get("unit") or record.get("price_unit") or "VND",
+                "source_key": suffix,
+            })
 
-def _first_present(record: dict[str, Any], keys: tuple[str, ...]) -> Any:
-    for key in keys:
-        value = record.get(key)
-        if value not in (None, ""):
-            return value
-    return None
+        return items
 
 
-def _derive_label(record: dict[str, Any], source_name: str, index: int) -> str:
-    ignored = set(VNAppMobGoldProvider.BUY_KEYS + VNAppMobGoldProvider.SELL_KEYS)
-    ignored |= {"unit", "price_unit", "created_at", "updated_at", "date", "time"}
-    parts = [
-        str(value)
-        for key, value in record.items()
-        if key not in ignored and value not in (None, "")
-    ]
-    if parts:
-        return " - ".join(parts[:2])
-    return f"{source_name} #{index}"
+def _gold_label(suffix: str) -> str:
+    return GOLD_LABELS.get(suffix, suffix.replace("_", " "))
+
+
+def _gold_suffix_sort_key(suffix: str) -> tuple[int, str]:
+    order = {
+        "1l": 10,
+        "5c": 20,
+        "1c": 30,
+        "nhan1c": 40,
+        "nutrang_75": 50,
+        "nutrang_99": 60,
+        "nutrang_9999": 70,
+    }
+    return order.get(suffix, 999), suffix
 
 
 def _looks_like_expired_key(text: str) -> bool:
