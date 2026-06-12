@@ -125,7 +125,7 @@ _GOLD_KEYWORDS = {
     'giá vàng', 'vàng', 'gia vang', 'vang',
     'giá sjc', 'gia sjc', 'giá doji', 'gia doji', 'giá pnj', 'gia pnj',
 }
-_SILVER_KEYWORDS = {'giá bạc', 'bạc', 'gia bac', 'bac'}
+_SILVER_KEYWORDS = {'giá bạc', 'bạc', 'gia bac', 'bac', 'giá bạc phú quý', 'gia bac phu quy'}
 _STARTUP_KEYWORDS = {'tin startup', 'startup'}
 
 

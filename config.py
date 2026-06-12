@@ -43,6 +43,12 @@ VNAPPMOB_GOLD_TIMEOUT: float = float(os.getenv('VNAPPMOB_GOLD_TIMEOUT', '10'))
 VNAPPMOB_AUTO_REFRESH_GOLD_KEY: bool = (
     os.getenv('VNAPPMOB_AUTO_REFRESH_GOLD_KEY', 'false').lower() in {'1', 'true', 'yes', 'on'}
 )
+SILVER_PROVIDER: str = os.getenv('SILVER_PROVIDER', 'phuquy').lower()
+PHUQUY_SILVER_URL: str = os.getenv(
+    'PHUQUY_SILVER_URL',
+    'https://giabac.phuquygroup.vn/PhuQuyPrice/SilverPricePartial',
+)
+PHUQUY_SILVER_TIMEOUT: float = float(os.getenv('PHUQUY_SILVER_TIMEOUT', '10'))
 STARTUP_NEWS_PROVIDER: str = os.getenv('STARTUP_NEWS_PROVIDER', 'mock').lower()
 STARTUP_CACHE_TTL_MINUTES: int = int(os.getenv('STARTUP_CACHE_TTL_MINUTES', '60'))
 ENABLE_SCHEDULER: bool = os.getenv('ENABLE_SCHEDULER', 'true').lower() in {'1', 'true', 'yes', 'on'}

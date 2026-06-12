@@ -711,17 +711,48 @@ async def silver_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not data:
         await _message(update).reply_text("Không có dữ liệu giá bạc.")
         return
-    await _message(update).reply_text(
-        "\n".join([
-            "Giá bạc",
-            f"Mua vào: {format_currency(data.get('buy', 0))}",
-            f"Bán ra: {format_currency(data.get('sell', 0))}",
-            f"Đơn vị: {data.get('unit', 'N/A')}",
-            f"Cập nhật: {data.get('updated_at', 'N/A')}",
-            f"Nguồn: {data.get('source', 'Mock/sample data')}",
-            "Không phải khuyến nghị đầu tư.",
-        ])
-    )
+    await _message(update).reply_text(_format_silver_response(data), parse_mode="HTML")
+
+
+def _format_silver_response(data: dict) -> str:
+    items = data.get("items") or []
+    if not items and ("buy" in data or "sell" in data):
+        items = [{
+            "product": data.get("product") or "Bạc",
+            "unit": data.get("unit") or "VND",
+            "buy": data.get("buy"),
+            "sell": data.get("sell"),
+        }]
+
+    if not items:
+        return "Không có dữ liệu giá bạc."
+
+    product_width = max(28, max(len(str(item.get("product") or "")) for item in items))
+    unit_width = max(10, max(len(str(item.get("unit") or "")) for item in items))
+    buy_width = max(9, max(len(format_gold_k(item.get("buy"))) for item in items))
+    sell_width = max(8, max(len(format_gold_k(item.get("sell"))) for item in items))
+
+    table_lines = [
+        f"{'Loại':<{product_width}}  {'Đơn vị':<{unit_width}}  {'Mua vào':>{buy_width}}  {'Bán ra':>{sell_width}}",
+    ]
+    for item in items:
+        product = str(item.get("product") or "")
+        unit = str(item.get("unit") or "VND")
+        buy = format_gold_k(item.get("buy"))
+        sell = format_gold_k(item.get("sell"))
+        table_lines.append(f"{product:<{product_width}}  {unit:<{unit_width}}  {buy:>{buy_width}}  {sell:>{sell_width}}")
+
+    lines = [
+        "Giá bạc Phú Quý hôm nay",
+        "",
+        f"<pre>{html.escape(chr(10).join(table_lines))}</pre>",
+        f"Nguồn: {html.escape(str(data.get('source', 'N/A')))}",
+        f"Cập nhật: {html.escape(str(data.get('updated_at', 'N/A')))}",
+        "Không phải khuyến nghị đầu tư.",
+    ]
+    if data.get("is_mock"):
+        lines.append("Ghi chú: mock/sample data.")
+    return "\n".join(lines)
 
 
 async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
