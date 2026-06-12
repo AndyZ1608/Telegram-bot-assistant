@@ -639,8 +639,8 @@ def _format_gold_table(items: list[dict], group_name: str) -> str:
 def _format_gold_response(data: dict, source_filter: str | None = None) -> str:
     groups = data.get("groups") or {}
     errors = data.get("errors") or {}
-    lines = ["Giá vàng hôm nay", ""]
-    order = [source_filter.upper()] if source_filter else ["SJC", "DOJI", "PNJ"]
+    lines = ["Giá vàng SJC hôm nay", ""]
+    order = ["SJC"]
 
     has_item = False
     for group_name in order:
@@ -672,8 +672,12 @@ def _format_gold_response(data: dict, source_filter: str | None = None) -> str:
 
 
 async def _send_gold(update: Update, source_filter: str | None = None) -> None:
+    if source_filter and source_filter.lower() in {"doji", "pnj"}:
+        await _message(update).reply_text("Hiện bot chỉ hỗ trợ giá vàng SJC.")
+        return
+
     try:
-        data = await get_gold_provider().get_gold_price(source_filter)
+        data = await get_gold_provider().get_gold_price("sjc")
     except GoldAuthError:
         await _message(update).reply_text(AUTH_ERROR_MESSAGE)
         return

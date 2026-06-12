@@ -118,18 +118,6 @@ class MockGoldProvider(GoldPriceProvider):
                     {"label": "Nhẫn 1C", "buy": 78_000_000, "sell": 79_500_000},
                 ],
             },
-            "DOJI": {
-                "items": [
-                    {"label": "HCM", "buy": 92_300_000, "sell": 94_300_000},
-                    {"label": "Hà Nội", "buy": 92_300_000, "sell": 94_300_000},
-                ],
-            },
-            "PNJ": {
-                "items": [
-                    {"label": "HCM", "buy": 78_100_000, "sell": 79_400_000},
-                    {"label": "Hà Nội", "buy": 78_100_000, "sell": 79_400_000},
-                ],
-            },
         }
         selected = _normalize_source(source)
         if selected:
@@ -139,7 +127,7 @@ class MockGoldProvider(GoldPriceProvider):
             "provider": "mock",
             "groups": groups,
             "updated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "source": "Mock/sample data",
+            "source": "Mock/sample data - SJC",
             "is_mock": True,
         }
 
@@ -149,8 +137,6 @@ class VNAppMobGoldProvider(GoldPriceProvider):
 
     ENDPOINTS = {
         "SJC": "/api/v2/gold/sjc",
-        "DOJI": "/api/v2/gold/doji",
-        "PNJ": "/api/v2/gold/pnj",
     }
 
     def __init__(self, api_key: str, base_url: str, timeout: float):
@@ -163,7 +149,7 @@ class VNAppMobGoldProvider(GoldPriceProvider):
             raise GoldAuthError(AUTH_ERROR_MESSAGE)
 
         selected = _normalize_source(source)
-        sources = [selected] if selected else list(self.ENDPOINTS)
+        sources = [selected or "SJC"]
         groups: dict[str, dict[str, Any]] = {}
         errors: dict[str, str] = {}
         auth_error = False
@@ -196,7 +182,7 @@ class VNAppMobGoldProvider(GoldPriceProvider):
             "groups": groups,
             "errors": errors,
             "updated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "source": "VNAppMob Gold API",
+            "source": "VNAppMob Gold API - SJC",
             "is_mock": False,
         }
 
@@ -412,8 +398,6 @@ def _normalize_source(source: str | None) -> str | None:
     value = source.strip().upper()
     aliases = {
         "SJC": "SJC",
-        "DOJI": "DOJI",
-        "PNJ": "PNJ",
     }
     return aliases.get(value)
 
