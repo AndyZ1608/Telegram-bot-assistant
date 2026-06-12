@@ -601,6 +601,7 @@ async def _send_stock(update: Update, data: dict | None, symbol: str) -> None:
         await _message(update).reply_text(f"Không lấy được dữ liệu mã {symbol} từ vnstock. Vui lòng thử lại sau.")
         return
     price = _format_optional_currency(data.get("price"))
+    reference = _format_optional_currency(data.get("reference_price", data.get("prior_close")))
     change = _format_signed_currency(data.get("change"))
     percent = _format_signed_percent(data.get("percent_change", data.get("change_percent")))
     exchange = data.get("exchange") or data.get("market") or "-"
@@ -609,6 +610,7 @@ async def _send_stock(update: Update, data: dict | None, symbol: str) -> None:
         f"{data.get('symbol', symbol)} hôm nay",
         "",
         f"Giá: {price}",
+        f"Tham chiếu: {reference}",
         f"Thay đổi: {change} ({percent})",
         f"Sàn: {exchange}",
         f"Nguồn: {data.get('source', 'N/A')}",
