@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from datetime import datetime
+import json
 import logging
 from typing import Any, Optional
 
@@ -28,11 +29,59 @@ GOLD_LABELS = {
     "1c": "1 chỉ",
     "1l": "1 lượng",
     "5c": "5 chỉ",
-    "nhan1c": "nhẫn 1 chỉ",
-    "nutrang_75": "nữ trang 75",
-    "nutrang_99": "nữ trang 99",
-    "nutrang_9999": "nữ trang 9999",
+    "nhan1c": "Nhẫn 1 chỉ",
+    "nutrang_75": "Nữ trang 75",
+    "nutrang_99": "Nữ trang 99",
+    "nutrang_9999": "Nữ trang 9999",
+    "hcm": "HCM",
+    "hn": "Hà Nội",
+    "ha_noi": "Hà Nội",
+    "hanoi": "Hà Nội",
 }
+
+DIRECT_BUY_KEYS = (
+    "buy",
+    "buy_price",
+    "buyPrice",
+    "buying",
+    "buying_price",
+    "buyValue",
+    "price_buy",
+    "mua_vao",
+    "mua",
+)
+DIRECT_SELL_KEYS = (
+    "sell",
+    "sell_price",
+    "sellPrice",
+    "selling",
+    "selling_price",
+    "sellValue",
+    "price_sell",
+    "ban_ra",
+    "ban",
+)
+PRODUCT_LABEL_KEYS = (
+    "name",
+    "type",
+    "gold_type",
+    "goldType",
+    "product",
+    "product_name",
+    "productName",
+    "brand",
+    "title",
+    "label",
+)
+REGION_LABEL_KEYS = (
+    "location",
+    "area",
+    "city",
+    "province",
+    "branch",
+    "region",
+    "market",
+)
 
 
 class GoldProviderError(Exception):
@@ -126,7 +175,7 @@ class VNAppMobGoldProvider(GoldPriceProvider):
                     if items:
                         groups[name] = {"items": items}
                     else:
-                        errors[name] = "response rỗng hoặc sai format"
+                        errors[name] = "Không có dữ liệu từ API"
                 except GoldAuthError:
                     auth_error = True
                     errors[name] = "API key hết hạn hoặc không hợp lệ"
@@ -152,30 +201,50 @@ class VNAppMobGoldProvider(GoldPriceProvider):
     ) -> list[dict[str, Any]]:
         url = f"{self.base_url}{self.ENDPOINTS[source_name]}"
         async with session.get(url) as response:
+            status = response.status
             text = await response.text()
-            if response.status == 403 or _looks_like_expired_key(text):
+            if status == 403 or _looks_like_expired_key(text):
                 raise GoldAuthError(AUTH_ERROR_MESSAGE)
-            if response.status >= 400:
-                raise GoldProviderError(f"HTTP {response.status}")
+            if status >= 400:
+                raise GoldProviderError(f"HTTP {status}")
             try:
-                payload = await response.json(content_type=None)
+                payload = json.loads(text)
             except Exception as exc:
                 raise GoldProviderError("response JSON không hợp lệ") from exc
 
         results = payload.get("results") if isinstance(payload, dict) else None
         if not results:
+            logger.warning(
+                "VNAppMob %s returned empty results; status=%s payload_keys=%s",
+                source_name,
+                status,
+                _safe_keys(payload),
+            )
             return []
 
-        first_record = results[0] if isinstance(results, list) else results
-        if not isinstance(first_record, dict):
-            logger.warning("VNAppMob %s returned non-object results[0]", source_name)
-            return []
+        records = results if isinstance(results, list) else [results]
+        parsed: list[dict[str, Any]] = []
+        skipped_keys: list[list[str]] = []
+        for index, record in enumerate(records, start=1):
+            if not isinstance(record, dict):
+                continue
+            items = self._parse_price_pairs(record, source_name)
+            if not items:
+                direct_item = self._parse_direct_record(record, source_name, index)
+                if direct_item:
+                    items = [direct_item]
+            if items:
+                parsed.extend(items)
+            else:
+                skipped_keys.append(list(record.keys()))
 
-        parsed = self._parse_price_pairs(first_record, source_name)
         if not parsed:
             logger.warning(
-                "VNAppMob %s returned results[0] but no buy_*/sell_* price pairs could be parsed",
+                "VNAppMob %s returned results but no price pairs could be parsed; status=%s payload_keys=%s result_keys=%s",
                 source_name,
+                status,
+                _safe_keys(payload),
+                skipped_keys[:3],
             )
         return parsed
 
@@ -184,36 +253,121 @@ class VNAppMobGoldProvider(GoldPriceProvider):
         record: dict[str, Any],
         source_name: str,
     ) -> list[dict[str, Any]]:
+        generic_suffixes = {"price", "value", "amount"}
+        key_lookup = {str(key).lower(): key for key in record}
         suffixes = {
-            key[4:]
-            for key, value in record.items()
-            if key.startswith("buy_") and value not in (None, "")
+            ("prefix", lower_key[4:])
+            for lower_key, original_key in key_lookup.items()
+            if lower_key.startswith("buy_")
+            and lower_key[4:] not in generic_suffixes
+            and record.get(original_key) not in (None, "")
         }
         suffixes |= {
-            key[5:]
-            for key, value in record.items()
-            if key.startswith("sell_") and value not in (None, "")
+            ("prefix", lower_key[5:])
+            for lower_key, original_key in key_lookup.items()
+            if lower_key.startswith("sell_")
+            and lower_key[5:] not in generic_suffixes
+            and record.get(original_key) not in (None, "")
+        }
+        suffixes |= {
+            ("suffix", lower_key[:-4])
+            for lower_key, original_key in key_lookup.items()
+            if lower_key.endswith("_buy")
+            and lower_key[:-4] not in generic_suffixes
+            and record.get(original_key) not in (None, "")
+        }
+        suffixes |= {
+            ("suffix", lower_key[:-5])
+            for lower_key, original_key in key_lookup.items()
+            if lower_key.endswith("_sell")
+            and lower_key[:-5] not in generic_suffixes
+            and record.get(original_key) not in (None, "")
         }
 
         items: list[dict[str, Any]] = []
-        for suffix in sorted(suffixes, key=_gold_suffix_sort_key):
-            buy = record.get(f"buy_{suffix}")
-            sell = record.get(f"sell_{suffix}")
+        region = _record_region(record)
+        for direction, suffix in sorted(suffixes, key=lambda item: _gold_suffix_sort_key(item[1])):
+            if direction == "prefix":
+                buy = _get_case_insensitive(record, f"buy_{suffix}")
+                sell = _get_case_insensitive(record, f"sell_{suffix}")
+            else:
+                buy = _get_case_insensitive(record, f"{suffix}_buy")
+                sell = _get_case_insensitive(record, f"{suffix}_sell")
             if buy in (None, "") and sell in (None, ""):
                 continue
+            label = _gold_label(suffix)
+            if region and region.lower() not in label.lower():
+                label = f"{region} {label}"
             items.append({
-                "label": _gold_label(suffix),
+                "label": label,
                 "buy": buy,
                 "sell": sell,
-                "unit": record.get("unit") or record.get("price_unit") or "VND",
+                "unit": _get_case_insensitive(record, "unit") or _get_case_insensitive(record, "price_unit") or "VND",
                 "source_key": suffix,
             })
 
         return items
 
+    def _parse_direct_record(
+        self,
+        record: dict[str, Any],
+        source_name: str,
+        index: int,
+    ) -> dict[str, Any] | None:
+        buy = _first_present(record, DIRECT_BUY_KEYS)
+        sell = _first_present(record, DIRECT_SELL_KEYS)
+        if buy in (None, "") and sell in (None, ""):
+            return None
+
+        return {
+            "label": _record_label(record, source_name, index),
+            "buy": buy,
+            "sell": sell,
+            "unit": _get_case_insensitive(record, "unit") or _get_case_insensitive(record, "price_unit") or "VND",
+        }
+
+
+def _first_present(record: dict[str, Any], keys: tuple[str, ...]) -> Any:
+    for key in keys:
+        value = _get_case_insensitive(record, key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _get_case_insensitive(record: dict[str, Any], key: str) -> Any:
+    if key in record:
+        return record.get(key)
+    lowered = key.lower()
+    for actual_key, value in record.items():
+        if str(actual_key).lower() == lowered:
+            return value
+    return None
+
 
 def _gold_label(suffix: str) -> str:
-    return GOLD_LABELS.get(suffix, suffix.replace("_", " "))
+    label = GOLD_LABELS.get(suffix.lower())
+    if label:
+        return label
+    return suffix.replace("_", " ").strip().title()
+
+
+def _record_region(record: dict[str, Any]) -> str:
+    value = _first_present(record, REGION_LABEL_KEYS)
+    return str(value).strip() if value not in (None, "") else ""
+
+
+def _record_label(record: dict[str, Any], source_name: str, index: int) -> str:
+    product = _first_present(record, PRODUCT_LABEL_KEYS)
+    region = _record_region(record)
+    parts = []
+    if product not in (None, ""):
+        parts.append(str(product).strip())
+    if region and all(region.lower() not in part.lower() for part in parts):
+        parts.append(region)
+    if parts:
+        return " ".join(parts)
+    return f"{source_name} #{index}"
 
 
 def _gold_suffix_sort_key(suffix: str) -> tuple[int, str]:
@@ -227,6 +381,12 @@ def _gold_suffix_sort_key(suffix: str) -> tuple[int, str]:
         "nutrang_9999": 70,
     }
     return order.get(suffix, 999), suffix
+
+
+def _safe_keys(payload: Any) -> list[str]:
+    if isinstance(payload, dict):
+        return list(payload.keys())
+    return [type(payload).__name__]
 
 
 def _looks_like_expired_key(text: str) -> bool:

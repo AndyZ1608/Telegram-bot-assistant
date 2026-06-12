@@ -4,6 +4,7 @@ Telegram runtime and command handlers for the Phase 0 MVP.
 
 from __future__ import annotations
 
+import html
 import io
 import logging
 import re
@@ -78,7 +79,7 @@ from services.startup_news import (
     get_startup_news,
 )
 from services.unicorn_service import get_company, search_unicorns
-from utils.formatter import format_currency
+from utils.formatter import format_currency, format_gold_k
 from utils.parser import detect_intent, normalize_jar_name, parse_vietnamese_amount
 from utils.validators import validate_amount, validate_jar_name, validate_symbol
 
@@ -613,27 +614,25 @@ async def _send_stock(update: Update, data: dict | None, symbol: str) -> None:
 
 
 def _format_gold_value(value: object) -> str:
-    if value in (None, ""):
-        return "chưa có dữ liệu"
-    if isinstance(value, (int, float)):
-        return format_currency(float(value))
+    return format_gold_k(value)
 
-    raw = str(value).strip()
-    if not raw:
-        return "chưa có dữ liệu"
 
-    compact = raw.replace(" ", "")
-    separators = compact.count(".") + compact.count(",")
-    if separators == 1:
-        sep = "." if "." in compact else ","
-        after_sep = compact.rsplit(sep, 1)[-1]
-        if len(after_sep) <= 2:
-            return raw
-
-    numeric = compact.replace(".", "").replace(",", "")
-    if numeric.isdigit():
-        return format_currency(float(numeric))
-    return raw
+def _format_gold_table(items: list[dict]) -> str:
+    label_width = max(
+        14,
+        min(24, max((len(str(item.get("label") or "")) for item in items), default=0)),
+    )
+    buy_width = max(10, max((len(_format_gold_value(item.get("buy"))) for item in items), default=0))
+    sell_width = max(10, max((len(_format_gold_value(item.get("sell"))) for item in items), default=0))
+    lines = [
+        f"{'Loại':<{label_width}}  {'Mua vào':>{buy_width}}  {'Bán ra':>{sell_width}}",
+    ]
+    for item in items:
+        label = str(item.get("label") or "")
+        buy = _format_gold_value(item.get("buy"))
+        sell = _format_gold_value(item.get("sell"))
+        lines.append(f"{label:<{label_width}}  {buy:>{buy_width}}  {sell:>{sell_width}}")
+    return "\n".join(lines)
 
 
 def _format_gold_response(data: dict, source_filter: str | None = None) -> str:
@@ -649,24 +648,21 @@ def _format_gold_response(data: dict, source_filter: str | None = None) -> str:
         if not items and group_name not in errors:
             continue
 
-        lines.append(f"{group_name}:")
+        lines.append(group_name)
         if items:
             has_item = True
-            for item in items:
-                label = item.get("label") or group_name
-                buy = _format_gold_value(item.get("buy"))
-                sell = _format_gold_value(item.get("sell"))
-                lines.append(f"- {label}: mua vào {buy}, bán ra {sell}")
+            table = html.escape(_format_gold_table(items))
+            lines.append(f"<pre>{table}</pre>")
         if group_name in errors and not items:
-            lines.append(f"- lỗi nguồn: {errors[group_name]}")
+            lines.append(html.escape(errors[group_name]))
         lines.append("")
 
     if not has_item:
         return "Không có dữ liệu giá vàng."
 
     lines.extend([
-        f"Nguồn: {data.get('source', 'N/A')}",
-        f"Cập nhật: {data.get('updated_at', 'N/A')}",
+        f"Nguồn: {html.escape(str(data.get('source', 'N/A')))}",
+        f"Cập nhật: {html.escape(str(data.get('updated_at', 'N/A')))}",
         "Không phải khuyến nghị đầu tư.",
     ])
     if data.get("is_mock"):
@@ -688,7 +684,7 @@ async def _send_gold(update: Update, source_filter: str | None = None) -> None:
     if not data:
         await _message(update).reply_text("Không có dữ liệu giá vàng.")
         return
-    await _message(update).reply_text(_format_gold_response(data, source_filter))
+    await _message(update).reply_text(_format_gold_response(data, source_filter), parse_mode="HTML")
 
 
 async def gold_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

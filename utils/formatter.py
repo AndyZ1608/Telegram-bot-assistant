@@ -7,6 +7,8 @@ Telegram messages.
 """
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import re
 from typing import Union
 
 
@@ -56,6 +58,74 @@ def format_currency(amount: float) -> str:
     if amount < 0:
         formatted = f'-{formatted}'
     return f'{formatted} VND'
+
+
+def format_gold_k(value: object) -> str:
+    """Format raw VND gold price as thousands of VND.
+
+    Examples:
+        >>> format_gold_k(142400000.0)
+        '142.400K'
+        >>> format_gold_k('98510786.0786')
+        '98.511K'
+    """
+    amount = _parse_gold_decimal(value)
+    if amount is None:
+        return '-'
+
+    thousands = (amount / Decimal('1000')).quantize(Decimal('1'), rounding=ROUND_HALF_UP)
+    formatted = f'{int(thousands):,}'.replace(',', '.')
+    return f'{formatted}K'
+
+
+def _parse_gold_decimal(value: object) -> Decimal | None:
+    if value in (None, ''):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, (int, float)):
+        return Decimal(str(value))
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    cleaned = re.sub(r'[^0-9,.\-]', '', raw)
+    if not cleaned or cleaned in {'-', '.', ','}:
+        return None
+
+    try:
+        return Decimal(_normalize_gold_number(cleaned))
+    except InvalidOperation:
+        return None
+
+
+def _normalize_gold_number(value: str) -> str:
+    if ',' in value and '.' in value:
+        if value.rfind(',') > value.rfind('.'):
+            return value.replace('.', '').replace(',', '.')
+        return value.replace(',', '')
+
+    if ',' in value:
+        parts = value.split(',')
+        if len(parts) > 2:
+            return ''.join(parts)
+        if len(parts[-1]) == 3 and len(parts[0]) <= 3:
+            return ''.join(parts)
+        return value.replace(',', '.')
+
+    if value.count('.') > 1:
+        parts = value.split('.')
+        if all(len(part) == 3 for part in parts[1:]):
+            return ''.join(parts)
+        return ''.join(parts[:-1]) + '.' + parts[-1]
+
+    if '.' in value:
+        before, after = value.split('.', 1)
+        if len(after) == 3 and len(before) <= 3:
+            return before + after
+
+    return value
 
 
 def format_percentage(value: float) -> str:
