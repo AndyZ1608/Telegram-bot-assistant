@@ -35,7 +35,9 @@ SILVER_API_KEY: str = os.getenv('SILVER_API_KEY', '')
 NEWS_API_KEY: str = os.getenv('NEWS_API_KEY', '')
 
 # Providers
-MARKET_PROVIDER: str = os.getenv('MARKET_PROVIDER', 'mock').lower()
+MARKET_PROVIDER: str = os.getenv('MARKET_PROVIDER', 'vnstock').lower()
+VNSTOCK_SOURCE: str = os.getenv('VNSTOCK_SOURCE', 'VCI')
+VNSTOCK_TIMEOUT: float = float(os.getenv('VNSTOCK_TIMEOUT', '10'))
 GOLD_PROVIDER: str = os.getenv('GOLD_PROVIDER', 'vnappmob').lower()
 VNAPPMOB_GOLD_API_KEY: str = os.getenv('VNAPPMOB_GOLD_API_KEY', '')
 VNAPPMOB_GOLD_BASE_URL: str = os.getenv('VNAPPMOB_GOLD_BASE_URL', 'https://api.vnappmob.com').rstrip('/')

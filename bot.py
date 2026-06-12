@@ -598,19 +598,58 @@ async def stock_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def _send_stock(update: Update, data: dict | None, symbol: str) -> None:
     if not data:
-        await _message(update).reply_text(f"Không có dữ liệu cổ phiếu {symbol}.")
+        await _message(update).reply_text(f"Không lấy được dữ liệu mã {symbol} từ vnstock. Vui lòng thử lại sau.")
         return
-    await _message(update).reply_text(
-        "\n".join([
-            f"Cổ phiếu: {data.get('symbol', symbol)}",
-            f"Sàn: {data.get('market', 'N/A')}",
-            f"Giá: {format_currency(float(data.get('price', 0)))}",
-            f"Thay đổi: {data.get('change', 0):,.0f} ({data.get('change_percent', 0):.2f}%)",
-            f"Cập nhật: {data.get('updated_at', 'N/A')}",
-            f"Nguồn: {data.get('source', 'N/A')}",
-            "Không phải khuyến nghị đầu tư.",
-        ])
-    )
+    price = _format_optional_currency(data.get("price"))
+    change = _format_signed_currency(data.get("change"))
+    percent = _format_signed_percent(data.get("percent_change", data.get("change_percent")))
+    exchange = data.get("exchange") or data.get("market") or "-"
+    note = data.get("note")
+    lines = [
+        f"{data.get('symbol', symbol)} hôm nay",
+        "",
+        f"Giá: {price}",
+        f"Thay đổi: {change} ({percent})",
+        f"Sàn: {exchange}",
+        f"Nguồn: {data.get('source', 'N/A')}",
+        f"Cập nhật: {data.get('updated_at', 'N/A')}",
+    ]
+    if note:
+        lines.append(f"Ghi chú: {note}")
+    lines.extend(["", "Không phải khuyến nghị đầu tư."])
+    await _message(update).reply_text("\n".join(lines))
+
+
+def _format_optional_currency(value: object) -> str:
+    numeric = _to_optional_float(value)
+    if numeric is None:
+        return "-"
+    return format_currency(numeric)
+
+
+def _format_signed_currency(value: object) -> str:
+    numeric = _to_optional_float(value)
+    if numeric is None:
+        return "-"
+    prefix = "+" if numeric > 0 else ""
+    return f"{prefix}{format_currency(numeric)}"
+
+
+def _format_signed_percent(value: object) -> str:
+    numeric = _to_optional_float(value)
+    if numeric is None:
+        return "-"
+    prefix = "+" if numeric > 0 else ""
+    return f"{prefix}{numeric:.2f}%"
+
+
+def _to_optional_float(value: object) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _format_gold_value(value: object) -> str:
