@@ -59,6 +59,7 @@ class MockMarketProvider(StockDataProvider):
             "market": data["market"],
             "exchange": data["market"],
             "price": data["price"],
+            "open_price": data["price"] - data["change"],
             "reference_price": data["price"] - data["change"],
             "prior_close": data["price"] - data["change"],
             "change": data["change"],
@@ -171,6 +172,19 @@ class VnstockMarketProvider(StockDataProvider):
                 change = computed_change
             if percent is None:
                 percent = computed_change / reference_price * 100 if reference_price else None
+        open_price = _normalize_vn_price(_pick_number(row, (
+            "open",
+            "open_price",
+            "openprice",
+            "match_open_price",
+            "listing_open_price",
+        ), contains=(("open",),)))
+        trading_status = _pick_text(row, (
+            "trading_status",
+            "status",
+            "market_status",
+            "session",
+        ))
         exchange = _pick_text(row, ("exchange", "market", "floor", "stock_exchange", "listing_exchange"))
 
         return _quote(
@@ -179,6 +193,8 @@ class VnstockMarketProvider(StockDataProvider):
             change=change,
             percent_change=percent,
             reference_price=reference_price,
+            open_price=open_price,
+            trading_status=trading_status,
             exchange=exchange,
             source=f"vnstock/{self.source}",
             is_realtime=True,
@@ -206,6 +222,7 @@ class VnstockMarketProvider(StockDataProvider):
         if price is None:
             return None
 
+        open_price = _normalize_vn_price(_pick_number(last, ("open", "open_price")))
         prev_price = _normalize_vn_price(_pick_number(previous or {}, ("close", "price", "match_price")))
         change = price - prev_price if prev_price is not None else None
         percent = (change / prev_price * 100) if change is not None and prev_price else None
@@ -219,6 +236,8 @@ class VnstockMarketProvider(StockDataProvider):
             change=change,
             percent_change=percent,
             reference_price=prev_price,
+            open_price=open_price,
+            trading_status=None,
             exchange=exchange,
             source=f"vnstock/{self.source}",
             is_realtime=False,
@@ -295,6 +314,8 @@ def _quote(
     change: float | None,
     percent_change: float | None,
     reference_price: float | None,
+    open_price: float | None,
+    trading_status: str | None,
     exchange: str | None,
     source: str,
     is_realtime: bool,
@@ -305,6 +326,7 @@ def _quote(
         "market": exchange,
         "exchange": exchange,
         "price": price,
+        "open_price": open_price,
         "reference_price": reference_price,
         "prior_close": reference_price,
         "change": change,
@@ -313,6 +335,7 @@ def _quote(
         "updated_at": datetime.now().strftime("%d/%m/%Y %H:%M"),
         "source": source,
         "is_realtime": is_realtime,
+        "trading_status": trading_status,
         "note": note,
     }
 

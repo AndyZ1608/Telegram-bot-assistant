@@ -600,21 +600,25 @@ async def _send_stock(update: Update, data: dict | None, symbol: str) -> None:
     if not data:
         await _message(update).reply_text(f"Không lấy được dữ liệu mã {symbol} từ vnstock. Vui lòng thử lại sau.")
         return
-    price = _format_optional_currency(data.get("price"))
-    reference = _format_optional_currency(data.get("reference_price", data.get("prior_close")))
-    change = _format_signed_currency(data.get("change"))
-    percent = _format_signed_percent(data.get("percent_change", data.get("change_percent")))
+    price = _format_stock_money(data.get("price"))
+    open_price = _format_stock_money(data.get("open_price"))
+    reference = _format_stock_money(data.get("reference_price", data.get("prior_close")))
+    change_value = data.get("change")
+    percent_value = data.get("percent_change", data.get("change_percent"))
+    change = _format_stock_money(change_value, signed=True)
+    percent = _format_stock_percent(percent_value)
     exchange = data.get("exchange") or data.get("market") or "-"
     note = data.get("note")
+    icon, status = _stock_trend(change_value, percent_value)
     lines = [
-        f"{data.get('symbol', symbol)} hôm nay",
+        f"{icon} {data.get('symbol', symbol)} | {price} | {status}",
         "",
-        f"Giá: {price}",
-        f"Tham chiếu: {reference}",
-        f"Thay đổi: {change} ({percent})",
-        f"Sàn: {exchange}",
-        f"Nguồn: {data.get('source', 'N/A')}",
-        f"Cập nhật: {data.get('updated_at', 'N/A')}",
+        f"{'Mở cửa:':<20}{open_price}",
+        f"{'Giá tham chiếu:':<20}{reference}",
+        f"{'Thay đổi:':<20}{change} ({percent})",
+        f"{'Sàn:':<20}{exchange}",
+        f"{'Nguồn:':<20}{data.get('source', 'N/A')}",
+        f"{'Cập nhật:':<20}{data.get('updated_at', 'N/A')}",
     ]
     if note:
         lines.append(f"Ghi chú: {note}")
@@ -622,27 +626,38 @@ async def _send_stock(update: Update, data: dict | None, symbol: str) -> None:
     await _message(update).reply_text("\n".join(lines))
 
 
-def _format_optional_currency(value: object) -> str:
+def _format_stock_money(value: object, signed: bool = False) -> str:
     numeric = _to_optional_float(value)
     if numeric is None:
         return "-"
-    return format_currency(numeric)
+    sign = ""
+    if signed and numeric > 0:
+        sign = "+"
+    rounded = round(abs(numeric))
+    formatted = f"{rounded:,}".replace(",", ".")
+    if numeric < 0:
+        sign = "-"
+    return f"{sign}{formatted} ₫"
 
 
-def _format_signed_currency(value: object) -> str:
-    numeric = _to_optional_float(value)
-    if numeric is None:
-        return "-"
-    prefix = "+" if numeric > 0 else ""
-    return f"{prefix}{format_currency(numeric)}"
-
-
-def _format_signed_percent(value: object) -> str:
+def _format_stock_percent(value: object) -> str:
     numeric = _to_optional_float(value)
     if numeric is None:
         return "-"
     prefix = "+" if numeric > 0 else ""
     return f"{prefix}{numeric:.2f}%"
+
+
+def _stock_trend(change_value: object, percent_value: object) -> tuple[str, str]:
+    change = _to_optional_float(change_value)
+    percent = _to_optional_float(percent_value)
+    if percent is None and change is None:
+        return "⚪", "Chưa rõ trạng thái"
+    if (percent is not None and percent > 0) or (change is not None and change > 0):
+        return "🟢", "Đang tăng"
+    if (percent is not None and percent < 0) or (change is not None and change < 0):
+        return "🔴", "Đang giảm"
+    return "🟡", "Không đổi"
 
 
 def _to_optional_float(value: object) -> float | None:
