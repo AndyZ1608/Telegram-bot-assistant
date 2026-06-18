@@ -259,6 +259,23 @@ class AutomationLog(Base):
         )
 
 
+class JarsSettings(Base):
+    """Per-user JARS preset selection."""
+
+    __tablename__ = "jars_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    preset: Mapped[str] = mapped_column(String, default="default", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<JarsSettings(user_id={self.user_id}, preset={self.preset!r})>"
+
+
 class Settings(Base):
     """Per-user configuration preferences."""
 

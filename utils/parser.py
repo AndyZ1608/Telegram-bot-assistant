@@ -10,9 +10,6 @@ import re
 import unicodedata
 from typing import Optional
 
-from config import CATEGORY_KEYWORDS
-
-
 # ---------------------------------------------------------------------------
 # Amount parsing
 # ---------------------------------------------------------------------------
@@ -128,10 +125,199 @@ _GOLD_KEYWORDS = {
 _SILVER_KEYWORDS = {'giá bạc', 'bạc', 'gia bac', 'bac', 'giá bạc phú quý', 'gia bac phu quy'}
 _STARTUP_KEYWORDS = {'tin startup', 'startup'}
 
+_JARS_CATEGORY_MAP: dict[str, dict[str, tuple[str, ...]]] = {
+    'NEC': {
+        'Ăn uống': (
+            'ăn sáng', 'ăn trưa', 'ăn tối', 'ăn', 'uống', 'cơm', 'phở', 'bún',
+            'cafe thường ngày', 'cà phê thường ngày', 'cafe', 'cà phê',
+        ),
+        'Nhà thuê': ('tiền nhà', 'thuê nhà', 'nhà thuê'),
+        'Hóa đơn': ('điện', 'tiền điện', 'nước', 'tiền nước', 'internet', 'wifi'),
+        'Di chuyển': (
+            'đổ xăng', 'xăng', 'gửi xe', 'sửa xe', 'bảo dưỡng xe',
+            'bảo trì xe',
+        ),
+        'Y tế': ('thuốc', 'mua thuốc', 'khám bệnh', 'đi khám'),
+        'Sinh hoạt': (
+            'đi chợ', 'siêu thị', 'rau', 'thịt', 'gạo', 'đồ sinh hoạt',
+            'nước giặt', 'dầu gội',
+        ),
+        'Khác': (),
+    },
+    'FFA': {
+        'Cổ phiếu': (
+            'mua cổ phiếu', 'cổ phiếu', 'chứng khoán', 'mua fpt', 'mua hpg',
+        ),
+        'Quỹ đầu tư': ('quỹ đầu tư', 'quỹ', 'etf'),
+        'Vàng đầu tư': ('vàng đầu tư', 'mua vàng đầu tư'),
+        'Crypto': ('crypto', 'bitcoin', 'btc', 'eth'),
+        'Tài sản khác': ('đầu tư', 'tài sản', 'thu nhập thụ động'),
+    },
+    'LTS': {
+        'Quỹ dự phòng': ('quỹ dự phòng', 'emergency fund', 'dự phòng'),
+        'Mục tiêu dài hạn': ('tiết kiệm', 'dài hạn', 'lập gia đình', 'cưới'),
+        'Mua nhà': ('mua nhà',),
+        'Mua xe': ('mua xe',),
+        'Khác': (),
+    },
+    'EDU': {
+        'Sách': ('sách', 'mua sách'),
+        'Khóa học': ('khóa học tiếng anh', 'khóa học', 'học', 'training'),
+        'Chứng chỉ': ('chứng chỉ', 'thi chứng chỉ'),
+        'Lab/Học tập': ('lab', 'network', 'security', 'tiếng anh'),
+        'Workshop': ('workshop', 'seminar'),
+    },
+    'PLAY': {
+        'Hẹn hò': ('hẹn hò', 'người yêu'),
+        'Bạn bè': ('bạn bè', 'nhậu'),
+        'Ăn ngoài': ('ăn ngoài', 'ăn tối với bạn bè'),
+        'Du lịch': ('du lịch',),
+        'Mua sắm': ('mua đồ thích', 'mua sắm'),
+        'Thể thao': ('gym', 'thể thao', 'đá bóng', 'bóng đá'),
+        'Giải trí': ('đi chơi', 'xem phim', 'game', 'giải trí', 'cafe chill'),
+    },
+    'GIVE': {
+        'Gia đình': ('gửi bố mẹ', 'gửi mẹ', 'biếu', 'giúp đỡ'),
+        'Quà tặng': ('tặng quà', 'quà', 'sinh nhật', 'mừng cưới'),
+        'Từ thiện': ('từ thiện', 'ủng hộ'),
+        'Cộng đồng': ('cộng đồng',),
+        'Khác': (),
+    },
+}
+
+_JARS_AMBIGUOUS_KEYWORDS: dict[str, dict[str, str]] = {
+    'mua đồ': {'PLAY': 'Mua sắm', 'NEC': 'Sinh hoạt'},
+    'mua do': {'PLAY': 'Mua sắm', 'NEC': 'Sinh hoạt'},
+}
+
+_JARS_DEFAULT_CATEGORY: dict[str, str] = {
+    'NEC': 'Khác',
+    'FFA': 'Tài sản khác',
+    'LTS': 'Khác',
+    'EDU': 'Lab/Học tập',
+    'PLAY': 'Giải trí',
+    'GIVE': 'Khác',
+}
+
 
 def _text_lower(text: str) -> str:
     """Return lower-cased, whitespace-normalized text."""
     return ' '.join(text.lower().split())
+
+
+def _normalize_for_match(text: str) -> str:
+    return _text_lower(_remove_diacritics(text))
+
+
+def _contains_keyword(normalized_text: str, keyword: str) -> bool:
+    normalized_keyword = _normalize_for_match(keyword)
+    pattern = rf'(?<!\w){re.escape(normalized_keyword)}(?!\w)'
+    return bool(re.search(pattern, normalized_text, flags=re.IGNORECASE))
+
+
+def _strip_amount_from_note(text: str) -> str:
+    note = re.sub(
+        r'\d+(?:[.,]\d+)?\s*(?:k|tr|triệu|nghìn|ngàn|củ|tỷ|đồng|vnd|vnđ)?\s*',
+        '',
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return note or text.strip()
+
+
+def _find_jars_category_matches(text: str) -> list[dict]:
+    normalized = _normalize_for_match(text)
+    matches: list[dict] = []
+
+    for jar_code, categories in _JARS_CATEGORY_MAP.items():
+        for category, keywords in categories.items():
+            for keyword in keywords:
+                if _contains_keyword(normalized, keyword):
+                    normalized_keyword = _normalize_for_match(keyword)
+                    matches.append({
+                        'jar': jar_code,
+                        'category': category,
+                        'keyword': keyword,
+                        'score': len(normalized_keyword),
+                    })
+
+    # Uppercase ticker purchase shorthand: "mua FPT 2tr", "mua HPG 5tr".
+    if re.search(r'(?<!\w)mua\s+[A-Z]{2,10}(?!\w)', text):
+        matches.append({
+            'jar': 'FFA',
+            'category': 'Cổ phiếu',
+            'keyword': 'mua <ticker>',
+            'score': 40,
+        })
+
+    return sorted(matches, key=lambda item: item['score'], reverse=True)
+
+
+def parse_jars_expense(text: str) -> dict:
+    """Parse natural Vietnamese expense text into JARS fields and confidence."""
+    amount = parse_vietnamese_amount(text)
+    note = _strip_amount_from_note(text) if text else ''
+
+    if amount is None:
+        matches = _find_jars_category_matches(text)
+        best = matches[0] if matches else {}
+        return {
+            'intent': 'expense',
+            'amount': None,
+            'note': note or None,
+            'category': best.get('jar'),
+            'subcategory': best.get('category'),
+            'confidence': 'LOW',
+            'category_candidates': {},
+            'reason': 'missing_amount',
+        }
+
+    normalized = _normalize_for_match(text)
+    for keyword, candidates in _JARS_AMBIGUOUS_KEYWORDS.items():
+        if _contains_keyword(normalized, keyword):
+            return {
+                'intent': 'expense',
+                'amount': amount,
+                'note': note,
+                'category': None,
+                'subcategory': None,
+                'confidence': 'MEDIUM',
+                'category_candidates': candidates,
+                'reason': 'ambiguous_category',
+            }
+
+    matches = _find_jars_category_matches(text)
+    if not matches:
+        return {
+            'intent': 'expense',
+            'amount': amount,
+            'note': note,
+            'category': None,
+            'subcategory': None,
+            'confidence': 'LOW',
+            'category_candidates': {},
+            'reason': 'unknown_category',
+        }
+
+    best_score = matches[0]['score']
+    top_matches = [match for match in matches if match['score'] == best_score]
+    top_jars = {match['jar'] for match in top_matches}
+    best = top_matches[0]
+    confidence = 'HIGH' if len(top_jars) == 1 else 'MEDIUM'
+
+    return {
+        'intent': 'expense',
+        'amount': amount,
+        'note': note,
+        'category': best['jar'] if confidence == 'HIGH' else None,
+        'subcategory': best['category'] if confidence == 'HIGH' else None,
+        'confidence': confidence,
+        'category_candidates': {
+            match['jar']: match['category'] for match in top_matches
+        },
+        'reason': 'matched_keyword' if confidence == 'HIGH' else 'ambiguous_keyword',
+        'matched_keyword': best['keyword'],
+    }
 
 
 def _extract_stock_symbol(text: str) -> Optional[str]:
@@ -441,6 +627,23 @@ def _detect_startup_command(text: str) -> Optional[dict]:
     return None
 
 
+def _detect_jars_coaching_command(text: str) -> Optional[dict]:
+    """Detect natural-language JARS coaching commands."""
+    normalized = _normalize_for_match(text)
+    if normalized in {
+        'tu van tai chinh thang nay',
+        'thang nay toi tieu on khong',
+    }:
+        return {'intent': 'coach'}
+    if normalized == 'kiem tra 6 lo':
+        return {'intent': 'allocation_check'}
+    if normalized == 'goi y ty le thang sau':
+        return {'intent': 'ratio_suggest'}
+    if normalized == 'bao cao 6 lo cuoi thang':
+        return {'intent': 'monthly_jars_report'}
+    return None
+
+
 def detect_intent(text: str) -> dict:
     """Detect user intent from natural Vietnamese text.
 
@@ -478,6 +681,10 @@ def detect_intent(text: str) -> dict:
     startup_command = _detect_startup_command(text)
     if startup_command:
         return startup_command
+
+    coaching_command = _detect_jars_coaching_command(text)
+    if coaching_command:
+        return coaching_command
 
     automation_command = _detect_automation_command(text)
     if automation_command:
@@ -520,6 +727,10 @@ def detect_intent(text: str) -> dict:
                 'amount': amount,
             }
 
+    expense_parse = parse_jars_expense(text)
+    if expense_parse.get('amount') is not None or expense_parse.get('category'):
+        return expense_parse
+
     # --- Gold ---
     gold_source = _extract_gold_source(text)
     if gold_source:
@@ -559,26 +770,6 @@ def detect_intent(text: str) -> dict:
                 result['topic'] = topic
             return result
 
-    # --- Expense (fallback with amount detection) ---
-    amount = parse_vietnamese_amount(text)
-    if amount is not None:
-        category = detect_category(text)
-        # Build note by stripping the numeric/unit portion
-        note = re.sub(
-            r'\d+(?:[.,]\d+)?\s*(?:k|tr|triệu|nghìn|ngàn|củ|tỷ|đồng|vnd|vnđ)?\s*',
-            '',
-            text,
-            flags=re.IGNORECASE,
-        ).strip()
-        if not note:
-            note = text.strip()
-        return {
-            'intent': 'expense',
-            'amount': amount,
-            'note': note,
-            'category': category,
-        }
-
     return {'intent': 'unknown'}
 
 
@@ -587,26 +778,13 @@ def detect_intent(text: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def detect_category(text: str) -> Optional[str]:
-    """Match *text* against category keywords from ``config.CATEGORY_KEYWORDS``.
-
-    Returns the jar name (e.g. ``'an_uong'``, ``'xang_xe'``) whose keyword
-    list contains a word found in *text*, or ``None`` if no category matches.
-
-    The comparison is case-insensitive.
-    """
+    """Map a natural Vietnamese expense sentence to one of the 6 JARS codes."""
     if not text:
         return None
 
-    lower = _text_lower(text)
-    ranked_keywords: list[tuple[str, str]] = []
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        for keyword in keywords:
-            ranked_keywords.append((category, _text_lower(keyword)))
-
-    for category, keyword in sorted(ranked_keywords, key=lambda item: len(item[1]), reverse=True):
-        pattern = rf'(?<!\w){re.escape(keyword)}(?!\w)'
-        if re.search(pattern, lower, flags=re.IGNORECASE):
-            return category
+    match = parse_jars_expense(text)
+    if match.get('confidence') == 'HIGH':
+        return match.get('category')
     return None
 
 

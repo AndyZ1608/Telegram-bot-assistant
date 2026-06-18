@@ -26,7 +26,6 @@ from services.accounting_service import (
     JarNotFoundError,
     MissingIncomeError,
     NoExportDataError,
-    add_expense,
     add_or_update_jar,
     delete_expense,
     delete_jar,
@@ -59,6 +58,26 @@ from services.investment_service import (
     remove_portfolio_position,
     remove_watch_symbol,
 )
+from services.jars_service import (
+    InvalidJarCodeError,
+    InvalidPresetError,
+    JAR_ORDER,
+    PRESETS,
+    add_jars_expense,
+    allocate_income,
+    days_left_in_month,
+    get_jars_dashboard,
+    get_jars_overview,
+    init_jars,
+    normalize_jar_code,
+)
+from services.jars_coaching_service import (
+    build_allocation_check,
+    build_coach,
+    build_monthly_jars_report,
+    build_post_expense_warning,
+    build_ratio_suggest,
+)
 from services.market_data import get_stock_provider
 from services.reminder_service import (
     InvalidDayError,
@@ -80,7 +99,12 @@ from services.startup_news import (
 )
 from services.unicorn_service import get_company, search_unicorns
 from utils.formatter import format_currency, format_gold_k
-from utils.parser import detect_intent, normalize_jar_name, parse_vietnamese_amount
+from utils.parser import (
+    detect_intent,
+    normalize_jar_name,
+    parse_jars_expense,
+    parse_vietnamese_amount,
+)
 from utils.validators import validate_amount, validate_jar_name, validate_symbol
 
 
@@ -91,8 +115,31 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+PENDING_JARS_TRANSACTIONS: dict[int, dict] = {}
+JAR_SELECTION_ALIASES = {
+    "1": "NEC",
+    "2": "FFA",
+    "3": "LTS",
+    "4": "EDU",
+    "5": "PLAY",
+    "6": "GIVE",
+}
+JARS_DEFAULT_SUBCATEGORY = {
+    "NEC": "Khác",
+    "FFA": "Tài sản khác",
+    "LTS": "Khác",
+    "EDU": "Lab/Học tập",
+    "PLAY": "Giải trí",
+    "GIVE": "Khác",
+}
+
+
 HELP_TEXT = """Các lệnh MVP:
 /income <amount>
+/allocate <amount>
+/jars
+/jars init
+/jars preset default|single_renter
 /jar add <name> <amount>
 /jar update <name> <amount>
 /jar delete <name>
@@ -101,6 +148,14 @@ HELP_TEXT = """Các lệnh MVP:
 /expense list [today|week|month]
 /expense update <id> <amount> <note>
 /expense delete <id>
+/dashboard
+/dailybudget
+/parse <text>
+/cancel
+/coach
+/allocation_check
+/monthly_jars_report
+/ratio_suggest
 /saving
 /report [month year]
 /weekreport
@@ -132,6 +187,8 @@ HELP_TEXT = """Các lệnh MVP:
 
 Ví dụ:
 /income 30000000
+/allocate 30000000
+/expense NEC 50000 ăn sáng
 /jar add an_uong 2000000
 /jar update an_uong 2500000
 /expense an_uong 50000 ăn sáng
@@ -348,6 +405,195 @@ def _format_summary(summary) -> str:
     return "\n".join(lines)
 
 
+def _format_vnd(amount: float | int | None) -> str:
+    value = int(round(amount or 0))
+    sign = "-" if value < 0 else ""
+    return f"{sign}{abs(value):,}".replace(",", ".") + " ₫"
+
+
+def _format_jars_percent(value: float) -> str:
+    return f"{value:.1f}%"
+
+
+def _format_jars_row(jar) -> str:
+    return (
+        f"{jar.code:<5} {jar.name:<20} "
+        f"{_format_vnd(jar.budget):>14} "
+        f"{_format_vnd(jar.spent):>14} "
+        f"{_format_vnd(jar.remaining):>14} "
+        f"{_format_jars_percent(jar.usage_percent):>7}"
+    )
+
+
+def _format_jars_table(jars) -> list[str]:
+    lines = [
+        "Ma    Ten lo                       Ngan sach         Da chi         Con lai    Used",
+        "-" * 86,
+    ]
+    lines.extend(_format_jars_row(jar) for jar in jars)
+    return lines
+
+
+def _format_jars_allocation(overview, title: str) -> str:
+    lines = [title, ""]
+    for jar in overview.jars:
+        lines.append(
+            f"{jar.code:<5} {jar.name:<20} "
+            f"{jar.ratio:>4.0f}% {_format_vnd(jar.budget):>14}"
+        )
+    return "\n".join(lines)
+
+
+def _format_jars_overview(overview) -> str:
+    if overview.income is None:
+        return "Bạn chưa chia thu nhập tháng này. Dùng /allocate 30000000"
+    lines = [
+        f"6 lọ tài chính tháng này - preset: {overview.preset}",
+        f"Thu nhập: {_format_vnd(overview.income)}",
+        "",
+    ]
+    lines.extend(_format_jars_table(overview.jars))
+    return "\n".join(lines)
+
+
+def _format_jars_expense_result(
+    jar,
+    amount: float,
+    note: str | None,
+    subcategory: str | None = None,
+) -> str:
+    category_text = subcategory or JARS_DEFAULT_SUBCATEGORY.get(jar.code, "Khác")
+    note_text = note or "-"
+    warning = ""
+    if jar.remaining < 0:
+        warning = "\nCảnh báo: lọ này đã vượt ngân sách."
+    elif jar.usage_percent > 80:
+        warning = "\nCảnh báo: lọ này đã dùng trên 80% ngân sách."
+    return (
+        f"Đã ghi: {_format_vnd(amount)}\n"
+        f"Lọ: {jar.code} - {jar.name}\n"
+        f"Category: {category_text}\n"
+        f"Ghi chú: {note_text}\n\n"
+        f"{jar.code} tháng này:\n"
+        f"Đã dùng: {_format_vnd(jar.spent)} / {_format_vnd(jar.budget)} "
+        f"({_format_jars_percent(jar.usage_percent)})\n"
+        f"Còn lại: {_format_vnd(jar.remaining)}"
+        f"{warning}"
+    )
+
+
+def _format_jars_warnings(jars) -> list[str]:
+    warnings = []
+    for jar in jars:
+        if jar.remaining < 0:
+            warnings.append(f"- {jar.code} vượt ngân sách {_format_vnd(abs(jar.remaining))}.")
+        elif jar.usage_percent > 80:
+            warnings.append(f"- {jar.code} đã dùng {_format_jars_percent(jar.usage_percent)}.")
+    return warnings
+
+
+def _format_jars_dashboard(summary, overview) -> str:
+    total_spent = sum(jar.spent for jar in overview.jars)
+    income = overview.income or summary.income or 0
+    lines = [
+        f"Dashboard tháng {summary.month:02d}/{summary.year}",
+        f"Thu nhập: {_format_vnd(income)}",
+        f"Tổng đã chi: {_format_vnd(total_spent)}",
+        f"Còn lại thực tế: {_format_vnd(income - total_spent)}",
+        "",
+    ]
+    lines.extend(_format_jars_table(overview.jars))
+    warnings = _format_jars_warnings(overview.jars)
+    if warnings:
+        lines.extend(["", "Cảnh báo:"])
+        lines.extend(warnings)
+    return "\n".join(lines)
+
+
+def _format_daily_budget(overview) -> str:
+    days = days_left_in_month()
+    jars_by_code = {jar.code: jar for jar in overview.jars}
+    lines = [f"Còn {days} ngày trong tháng.", ""]
+    for code in ("NEC", "PLAY"):
+        jar = jars_by_code.get(code)
+        if not jar:
+            continue
+        average = max(jar.remaining, 0) / days
+        lines.extend([
+            f"{code} còn {_format_vnd(jar.remaining)}",
+            f"Có thể tiêu trung bình: {_format_vnd(average)}/ngày",
+            "",
+        ])
+    return "\n".join(lines).strip()
+
+
+def _resolve_jar_selection(text: str) -> str | None:
+    raw = (text or "").strip().upper()
+    if raw in JAR_ORDER:
+        return raw
+    return JAR_SELECTION_ALIASES.get(raw)
+
+
+def _pending_subcategory(pending: dict, jar_code: str) -> str:
+    candidates = pending.get("category_candidates") or {}
+    return candidates.get(jar_code) or JARS_DEFAULT_SUBCATEGORY.get(jar_code, "Khác")
+
+
+def _format_pending_jars_question(parsed: dict) -> str:
+    amount = parsed.get("amount")
+    note = parsed.get("note") or "-"
+    lines = [
+        "Khoản này thuộc lọ nào?",
+        "",
+        "1. NEC - Chi tiêu cần thiết",
+        "2. FFA - Tự do tài chính",
+        "3. LTS - Tiết kiệm dài hạn",
+        "4. EDU - Giáo dục",
+        "5. PLAY - Hưởng thụ",
+        "6. GIVE - Cho đi",
+        "",
+        f"Số tiền: {_format_vnd(amount)}",
+        f"Ghi chú: {note}",
+        "Trả lời bằng mã lọ hoặc số 1-6. Dùng /cancel để hủy.",
+    ]
+    return "\n".join(lines)
+
+
+def _format_parse_result(parsed: dict) -> str:
+    amount = parsed.get("amount")
+    jar_code = parsed.get("category")
+    candidates = parsed.get("category_candidates") or {}
+    if jar_code:
+        jar_text = jar_code
+    elif candidates:
+        jar_text = ", ".join(f"{code} ({category})" for code, category in candidates.items())
+    else:
+        jar_text = "-"
+    category = parsed.get("subcategory") or "-"
+    return "\n".join([
+        f"Amount: {_format_vnd(amount) if amount is not None else '-'}",
+        f"Jar: {jar_text}",
+        f"Category: {category}",
+        f"Note: {parsed.get('note') or '-'}",
+        f"Confidence: {parsed.get('confidence', 'LOW')}",
+    ])
+
+
+async def _record_jars_expense(
+    update: Update,
+    user_id: int,
+    jar_code: str,
+    amount: float,
+    note: str | None,
+    subcategory: str | None,
+) -> None:
+    jar = await add_jars_expense(user_id, jar_code, amount, note)
+    warning = build_post_expense_warning(jar)
+    await _message(update).reply_text(
+        _format_jars_expense_result(jar, amount, note, subcategory) + warning
+    )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _telegram_user_id(update)
     await _message(update).reply_text(
@@ -372,6 +618,118 @@ async def income_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await set_income(user_id, amount)
     await _message(update).reply_text(f"Đã lưu income tháng này: {format_currency(amount)}")
+
+
+async def allocate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    amount = _parse_amount_or_none(_args_text(context))
+    error = _validate_amount_for_reply(amount)
+    if error:
+        await _message(update).reply_text(f"Sai cú pháp. Ví dụ: /allocate 30000000\n{error}")
+        return
+
+    overview = await allocate_income(user_id, amount)
+    await _message(update).reply_text(
+        _format_jars_allocation(
+            overview,
+            f"Đã chia thu nhập tháng này: {_format_vnd(amount)}",
+        )
+    )
+
+
+async def jars_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    args = context.args or []
+    if not args:
+        overview = await get_jars_overview(user_id)
+        await _message(update).reply_text(_format_jars_overview(overview))
+        return
+
+    action = args[0].lower()
+    if action == "init":
+        overview = await init_jars(user_id)
+        await _message(update).reply_text(
+            _format_jars_allocation(overview, f"Đã khởi tạo 6 lọ theo preset {overview.preset}.")
+        )
+        return
+
+    if action == "preset":
+        if len(args) != 2:
+            await _message(update).reply_text(
+                "Sai cú pháp. Ví dụ: /jars preset default hoặc /jars preset single_renter"
+            )
+            return
+        preset = args[1].lower()
+        try:
+            overview = await init_jars(user_id, preset=preset)
+        except InvalidPresetError:
+            await _message(update).reply_text(
+                f"Preset không hỗ trợ. Chọn một trong: {', '.join(PRESETS)}"
+            )
+            return
+        await _message(update).reply_text(
+            _format_jars_allocation(overview, f"Đã áp dụng preset {preset}.")
+        )
+        return
+
+    await _message(update).reply_text(
+        "Sai cú pháp. Ví dụ: /jars, /jars init, /jars preset single_renter"
+    )
+
+
+async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    summary, overview = await get_jars_dashboard(user_id)
+    if overview.income is None:
+        await _message(update).reply_text("Bạn chưa chia thu nhập tháng này. Dùng /allocate 30000000")
+        return
+    await _message(update).reply_text(_format_jars_dashboard(summary, overview))
+
+
+async def dailybudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    overview = await get_jars_overview(user_id)
+    if overview.income is None:
+        await _message(update).reply_text("Bạn chưa chia thu nhập tháng này. Dùng /allocate 30000000")
+        return
+    await _message(update).reply_text(_format_daily_budget(overview))
+
+
+async def parse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _telegram_user_id(update)
+    text = _args_text(context)
+    if not text:
+        await _message(update).reply_text("Sai cú pháp. Ví dụ: /parse đi chơi với người yêu 500k")
+        return
+    await _message(update).reply_text(_format_parse_result(parse_jars_expense(text)))
+
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    if PENDING_JARS_TRANSACTIONS.pop(user_id, None):
+        await _message(update).reply_text("Đã hủy khoản chi đang chờ phân loại.")
+        return
+    await _message(update).reply_text("Không có khoản chi nào đang chờ phân loại.")
+
+
+async def coach_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    await _message(update).reply_text(await build_coach(user_id))
+
+
+async def allocation_check_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    await _message(update).reply_text(await build_allocation_check(user_id))
+
+
+async def monthly_jars_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    await _message(update).reply_text(await build_monthly_jars_report(user_id))
+
+
+async def ratio_suggest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    await _message(update).reply_text(await build_ratio_suggest(user_id))
 
 
 async def jar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -490,10 +848,17 @@ async def expense_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if len(args) < 2:
-        await _message(update).reply_text("Sai cú pháp. Ví dụ: /expense an_uong 50000 ăn sáng")
+        await _message(update).reply_text("Sai cú pháp. Ví dụ: /expense NEC 50000 ăn sáng")
         return
 
-    jar_name = normalize_jar_name(args[0])
+    try:
+        jar_code = normalize_jar_code(args[0])
+    except InvalidJarCodeError:
+        await _message(update).reply_text(
+            f"Lọ không hợp lệ. Chỉ dùng 6 mã: {', '.join(JAR_ORDER)}. Ví dụ: /expense NEC 50000 ăn sáng"
+        )
+        return
+
     amount = _parse_amount_or_none(args[1])
     note_start = 2
     if amount is None and len(args) >= 3:
@@ -501,20 +866,17 @@ async def expense_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         note_start = 3
     amount_error = _validate_amount_for_reply(amount)
     if amount_error:
-        await _message(update).reply_text(f"Sai cú pháp. Ví dụ: /expense an_uong 50000 ăn sáng\n{amount_error}")
+        await _message(update).reply_text(f"Sai cú pháp. Ví dụ: /expense NEC 50000 ăn sáng\n{amount_error}")
         return
 
     note = " ".join(args[note_start:]).strip() or None
-    try:
-        await add_expense(user_id, jar_name, amount, note)
-    except JarNotFoundError:
-        await _message(update).reply_text(
-            f"Hũ {jar_name} không tồn tại trong tháng này. Tạo trước bằng: /jar add {jar_name} <amount>"
-        )
-        return
-
-    await _message(update).reply_text(
-        f"Đã ghi chi tiêu {format_currency(amount)} vào hũ {jar_name}."
+    await _record_jars_expense(
+        update,
+        user_id,
+        jar_code,
+        amount,
+        note,
+        JARS_DEFAULT_SUBCATEGORY.get(jar_code),
     )
 
 
@@ -1239,6 +1601,26 @@ async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = await _telegram_user_id(update)
     text = (_message(update).text or "").strip()
+
+    if user_id in PENDING_JARS_TRANSACTIONS:
+        jar_code = _resolve_jar_selection(text)
+        if jar_code is None:
+            await _message(update).reply_text(
+                "Mình đang chờ bạn chọn lọ cho khoản chi trước đó. "
+                "Trả lời NEC/FFA/LTS/EDU/PLAY/GIVE hoặc số 1-6. Dùng /cancel để hủy."
+            )
+            return
+        pending = PENDING_JARS_TRANSACTIONS.pop(user_id)
+        await _record_jars_expense(
+            update,
+            user_id,
+            jar_code,
+            pending["amount"],
+            pending.get("note"),
+            _pending_subcategory(pending, jar_code),
+        )
+        return
+
     intent = detect_intent(text)
     kind = intent.get("intent")
 
@@ -1315,14 +1697,35 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _message(update).reply_text(f"Đã {'bật' if enabled else 'tắt'} tự động check cảnh báo giá.")
         return
 
+    if kind == "coach":
+        await _message(update).reply_text(await build_coach(user_id))
+        return
+
+    if kind == "allocation_check":
+        await _message(update).reply_text(await build_allocation_check(user_id))
+        return
+
+    if kind == "monthly_jars_report":
+        await _message(update).reply_text(await build_monthly_jars_report(user_id))
+        return
+
+    if kind == "ratio_suggest":
+        await _message(update).reply_text(await build_ratio_suggest(user_id))
+        return
+
     if kind == "income":
         amount = intent.get("amount")
         error = _validate_amount_for_reply(amount)
         if error:
             await _message(update).reply_text(f"Không đọc được income. Ví dụ: Thu nhập tháng này 30 triệu\n{error}")
             return
-        await set_income(user_id, amount)
-        await _message(update).reply_text(f"Đã lưu income tháng này: {format_currency(amount)}")
+        overview = await allocate_income(user_id, amount)
+        await _message(update).reply_text(
+            _format_jars_allocation(
+                overview,
+                f"Đã chia thu nhập tháng này: {_format_vnd(amount)}",
+            )
+        )
         return
 
     if kind == "jar_add":
@@ -1350,28 +1753,38 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     if kind == "expense":
-        if not intent.get("category"):
-            await _message(update).reply_text(
-                "Mình chưa chắc khoản này thuộc hũ nào. Ghi rõ bằng: /expense <jar_name> <amount> <note>"
-            )
-            return
-        jar_name = normalize_jar_name(intent.get("category"))
         amount = intent.get("amount")
-        note = intent.get("note")
         error = _validate_amount_for_reply(amount)
         if error:
-            await _message(update).reply_text(error)
-            return
-        try:
-            await add_expense(user_id, jar_name, amount, note)
-        except JarNotFoundError:
             await _message(update).reply_text(
-                f"Đã nhận dạng hũ {jar_name}, nhưng hũ này chưa tồn tại. "
-                f"Tạo trước bằng: /jar add {jar_name} <amount>"
+                f"Mình chưa đọc được số tiền. Ví dụ: ăn sáng 50k\n{error}"
             )
             return
-        await _message(update).reply_text(
-            f"Đã ghi chi tiêu {format_currency(amount)} vào hũ {jar_name}."
+        if intent.get("confidence") != "HIGH" or not intent.get("category"):
+            PENDING_JARS_TRANSACTIONS[user_id] = {
+                "amount": amount,
+                "note": intent.get("note"),
+                "category_candidates": intent.get("category_candidates") or {},
+            }
+            await _message(update).reply_text(
+                _format_pending_jars_question(intent)
+            )
+            return
+        try:
+            jar_code = normalize_jar_code(intent.get("category"))
+        except InvalidJarCodeError:
+            await _message(update).reply_text(
+                f"Mình chưa chắc khoản này thuộc lọ nào. Ghi rõ bằng: /expense <{'|'.join(JAR_ORDER)}> <amount> <note>"
+            )
+            return
+        note = intent.get("note")
+        await _record_jars_expense(
+            update,
+            user_id,
+            jar_code,
+            amount,
+            note,
+            intent.get("subcategory"),
         )
         return
 
@@ -1573,8 +1986,18 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("income", income_command))
+    application.add_handler(CommandHandler("allocate", allocate_command))
+    application.add_handler(CommandHandler("jars", jars_command))
     application.add_handler(CommandHandler("jar", jar_command))
     application.add_handler(CommandHandler("expense", expense_command))
+    application.add_handler(CommandHandler("dashboard", dashboard_command))
+    application.add_handler(CommandHandler("dailybudget", dailybudget_command))
+    application.add_handler(CommandHandler("parse", parse_command))
+    application.add_handler(CommandHandler("cancel", cancel_command))
+    application.add_handler(CommandHandler("coach", coach_command))
+    application.add_handler(CommandHandler("allocation_check", allocation_check_command))
+    application.add_handler(CommandHandler("monthly_jars_report", monthly_jars_report_command))
+    application.add_handler(CommandHandler("ratio_suggest", ratio_suggest_command))
     application.add_handler(CommandHandler("saving", saving_command))
     application.add_handler(CommandHandler("report", report_command))
     application.add_handler(CommandHandler("weekreport", weekreport_command))
