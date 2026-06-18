@@ -276,6 +276,57 @@ class JarsSettings(Base):
         return f"<JarsSettings(user_id={self.user_id}, preset={self.preset!r})>"
 
 
+class MonthlyClosure(Base):
+    """Snapshot of a closed JARS month."""
+
+    __tablename__ = "monthly_closures"
+    __table_args__ = (
+        UniqueConstraint("user_id", "month", "year", name="uq_closure_user_month_year"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    income_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    total_spent: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    original_lts_budget: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    rollover_to_lts: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    final_lts_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    closed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    is_closed: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+
+class MonthlyRolloverDetail(Base):
+    """Per-jar rollover detail for a monthly closure snapshot."""
+
+    __tablename__ = "monthly_rollover_details"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    closure_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    jar_code: Mapped[str] = mapped_column(String, nullable=False)
+    budget_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    spent_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    remaining_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    rollover_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+
+
+class MonthCloseSettings(Base):
+    """Per-user auto month-close settings."""
+
+    __tablename__ = "month_close_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    auto_month_close_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    auto_month_close_time: Mapped[str] = mapped_column(String, default="23:50", nullable=False)
+    timezone: Mapped[str] = mapped_column(String, default="Asia/Ho_Chi_Minh", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
 class Settings(Base):
     """Per-user configuration preferences."""
 

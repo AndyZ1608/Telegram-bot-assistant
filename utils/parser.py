@@ -630,6 +630,18 @@ def _detect_startup_command(text: str) -> Optional[dict]:
 def _detect_jars_coaching_command(text: str) -> Optional[dict]:
     """Detect natural-language JARS coaching commands."""
     normalized = _normalize_for_match(text)
+    if normalized == 'xem chot thang':
+        return {'intent': 'month_close_preview'}
+    if normalized == 'chot thang nay':
+        return {'intent': 'month_close_confirm'}
+    if normalized == 'tong ket thang nay':
+        return {'intent': 'month_summary'}
+    if normalized == 'so sanh cac thang':
+        return {'intent': 'compare_months'}
+    if normalized == 'bat tu dong chot thang':
+        return {'intent': 'month_close_auto', 'enabled': True}
+    if normalized == 'tat tu dong chot thang':
+        return {'intent': 'month_close_auto', 'enabled': False}
     if normalized in {
         'tu van tai chinh thang nay',
         'thang nay toi tieu on khong',

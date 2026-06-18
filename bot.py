@@ -78,6 +78,16 @@ from services.jars_coaching_service import (
     build_post_expense_warning,
     build_ratio_suggest,
 )
+from services.month_close_service import (
+    MonthAlreadyClosedError,
+    confirm_month_close,
+    format_compare_months,
+    format_month_close_confirm,
+    format_month_close_preview,
+    format_month_summary,
+    build_month_close_preview,
+    update_month_close_auto,
+)
 from services.market_data import get_stock_provider
 from services.reminder_service import (
     InvalidDayError,
@@ -156,6 +166,10 @@ HELP_TEXT = """Các lệnh MVP:
 /allocation_check
 /monthly_jars_report
 /ratio_suggest
+/month_close preview|confirm
+/month_close auto on|off
+/month_summary [month year]
+/compare_months
 /saving
 /report [month year]
 /weekreport
@@ -415,6 +429,28 @@ def _format_jars_percent(value: float) -> str:
     return f"{value:.1f}%"
 
 
+def _progress_bar(percent: float, size: int = 10) -> str:
+    filled = round(percent / 100 * size)
+    filled = min(max(filled, 0), size)
+    return "▰" * filled + "▱" * (size - filled)
+
+
+def _dashboard_status_icon(jar) -> str:
+    if jar.budget <= 0:
+        return "⚪"
+    if jar.usage_percent >= 100:
+        return "🔴"
+    if jar.usage_percent >= 80:
+        return "🟡"
+    return "🟢"
+
+
+def _format_dashboard_percent(value: float) -> str:
+    if abs(value - round(value)) < 0.05:
+        return f"{round(value):.0f}%"
+    return f"{value:.1f}%"
+
+
 def _format_jars_row(jar) -> str:
     return (
         f"{jar.code:<5} {jar.name:<20} "
@@ -486,27 +522,46 @@ def _format_jars_warnings(jars) -> list[str]:
     warnings = []
     for jar in jars:
         if jar.remaining < 0:
-            warnings.append(f"- {jar.code} vượt ngân sách {_format_vnd(abs(jar.remaining))}.")
-        elif jar.usage_percent > 80:
-            warnings.append(f"- {jar.code} đã dùng {_format_jars_percent(jar.usage_percent)}.")
+            warnings.append(f"- {jar.code} đã vượt {_format_vnd(abs(jar.remaining))}")
+        elif jar.usage_percent >= 80:
+            warnings.append(
+                f"- {jar.code} đã dùng {_format_dashboard_percent(jar.usage_percent)}, "
+                f"còn {_format_vnd(jar.remaining)}"
+            )
     return warnings
 
 
 def _format_jars_dashboard(summary, overview) -> str:
     total_spent = sum(jar.spent for jar in overview.jars)
     income = overview.income or summary.income or 0
+    month = getattr(summary, "month", None) or 0
+    year = getattr(summary, "year", None) or 0
     lines = [
-        f"Dashboard tháng {summary.month:02d}/{summary.year}",
-        f"Thu nhập: {_format_vnd(income)}",
-        f"Tổng đã chi: {_format_vnd(total_spent)}",
-        f"Còn lại thực tế: {_format_vnd(income - total_spent)}",
+        f"📊 Dashboard {month:02d}/{year}",
         "",
+        f"💰 Thu nhập: {_format_vnd(income)}",
+        f"💸 Đã chi: {_format_vnd(total_spent)}",
+        f"✅ Còn lại: {_format_vnd(income - total_spent)}",
+        "",
+        "🏦 6 lọ tài chính",
     ]
-    lines.extend(_format_jars_table(overview.jars))
+
+    for jar in overview.jars:
+        percent = jar.usage_percent if jar.budget > 0 else 0
+        lines.extend([
+            "",
+            f"{_dashboard_status_icon(jar)} {jar.code} - {jar.name}",
+            f"{_format_vnd(jar.spent)} / {_format_vnd(jar.budget)}",
+            f"{_progress_bar(percent)} {_format_dashboard_percent(percent)}",
+            f"Còn lại: {_format_vnd(jar.remaining)}",
+        ])
+
     warnings = _format_jars_warnings(overview.jars)
     if warnings:
-        lines.extend(["", "Cảnh báo:"])
+        lines.extend(["", "⚠️ Cần chú ý"])
         lines.extend(warnings)
+    else:
+        lines.extend(["", "✅ Tình hình hiện tại ổn."])
     return "\n".join(lines)
 
 
@@ -587,7 +642,13 @@ async def _record_jars_expense(
     note: str | None,
     subcategory: str | None,
 ) -> None:
-    jar = await add_jars_expense(user_id, jar_code, amount, note)
+    try:
+        jar = await add_jars_expense(user_id, jar_code, amount, note)
+    except MonthAlreadyClosedError:
+        await _message(update).reply_text(
+            "Tháng này đã chốt. Không thể ghi thêm expense vào tháng đã closed."
+        )
+        return
     warning = build_post_expense_warning(jar)
     await _message(update).reply_text(
         _format_jars_expense_result(jar, amount, note, subcategory) + warning
@@ -730,6 +791,63 @@ async def monthly_jars_report_command(update: Update, context: ContextTypes.DEFA
 async def ratio_suggest_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = await _telegram_user_id(update)
     await _message(update).reply_text(await build_ratio_suggest(user_id))
+
+
+async def month_close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    args = context.args or []
+    if not args:
+        await _message(update).reply_text(
+            "Sai cú pháp. Ví dụ: /month_close preview, /month_close confirm, /month_close auto on"
+        )
+        return
+
+    action = args[0].lower()
+    if action == "preview":
+        preview = await build_month_close_preview(user_id)
+        if preview.is_closed:
+            await _message(update).reply_text(f"Tháng {preview.month:02d}/{preview.year} đã chốt.")
+            return
+        await _message(update).reply_text(format_month_close_preview(preview))
+        return
+
+    if action == "confirm":
+        try:
+            preview = await confirm_month_close(user_id)
+        except MonthAlreadyClosedError:
+            await _message(update).reply_text("Tháng này đã chốt. Không chốt trùng lần nữa.")
+            return
+        await _message(update).reply_text(format_month_close_confirm(preview))
+        return
+
+    if action == "auto":
+        if len(args) != 2 or args[1].lower() not in {"on", "off"}:
+            await _message(update).reply_text("Sai cú pháp. Ví dụ: /month_close auto on hoặc /month_close auto off")
+            return
+        enabled = args[1].lower() == "on"
+        await update_month_close_auto(user_id, enabled)
+        await _message(update).reply_text(
+            f"Đã {'bật' if enabled else 'tắt'} tự động chốt tháng lúc 23:50 ngày cuối tháng."
+        )
+        return
+
+    await _message(update).reply_text(
+        "Sai cú pháp. Ví dụ: /month_close preview, /month_close confirm, /month_close auto on"
+    )
+
+
+async def month_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    month, year, parse_error = _parse_month_year(context.args or [])
+    if parse_error:
+        await _message(update).reply_text(parse_error)
+        return
+    await _message(update).reply_text(await format_month_summary(user_id, month=month, year=year))
+
+
+async def compare_months_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = await _telegram_user_id(update)
+    await _message(update).reply_text(await format_compare_months(user_id))
 
 
 async def jar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1713,6 +1831,39 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await _message(update).reply_text(await build_ratio_suggest(user_id))
         return
 
+    if kind == "month_close_preview":
+        preview = await build_month_close_preview(user_id)
+        if preview.is_closed:
+            await _message(update).reply_text(f"Tháng {preview.month:02d}/{preview.year} đã chốt.")
+        else:
+            await _message(update).reply_text(format_month_close_preview(preview))
+        return
+
+    if kind == "month_close_confirm":
+        try:
+            preview = await confirm_month_close(user_id)
+        except MonthAlreadyClosedError:
+            await _message(update).reply_text("Tháng này đã chốt. Không chốt trùng lần nữa.")
+            return
+        await _message(update).reply_text(format_month_close_confirm(preview))
+        return
+
+    if kind == "month_summary":
+        await _message(update).reply_text(await format_month_summary(user_id))
+        return
+
+    if kind == "compare_months":
+        await _message(update).reply_text(await format_compare_months(user_id))
+        return
+
+    if kind == "month_close_auto":
+        enabled = bool(intent.get("enabled"))
+        await update_month_close_auto(user_id, enabled)
+        await _message(update).reply_text(
+            f"Đã {'bật' if enabled else 'tắt'} tự động chốt tháng lúc 23:50 ngày cuối tháng."
+        )
+        return
+
     if kind == "income":
         amount = intent.get("amount")
         error = _validate_amount_for_reply(amount)
@@ -1998,6 +2149,9 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("allocation_check", allocation_check_command))
     application.add_handler(CommandHandler("monthly_jars_report", monthly_jars_report_command))
     application.add_handler(CommandHandler("ratio_suggest", ratio_suggest_command))
+    application.add_handler(CommandHandler("month_close", month_close_command))
+    application.add_handler(CommandHandler("month_summary", month_summary_command))
+    application.add_handler(CommandHandler("compare_months", compare_months_command))
     application.add_handler(CommandHandler("saving", saving_command))
     application.add_handler(CommandHandler("report", report_command))
     application.add_handler(CommandHandler("weekreport", weekreport_command))

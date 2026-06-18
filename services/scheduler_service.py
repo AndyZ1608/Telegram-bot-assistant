@@ -18,6 +18,7 @@ from services.reminder_service import (
     list_user_settings,
     mark_sent,
 )
+from services.month_close_service import due_auto_month_close, list_auto_month_close_settings
 
 try:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -76,6 +77,11 @@ async def poll_automation_jobs(application) -> None:
             await _send_if_due(application, await due_startup_digest(settings, now_utc))
             for message in await due_price_alerts(settings):
                 await _send_if_due(application, message)
+        for settings in await list_auto_month_close_settings():
+            month_close_message = await due_auto_month_close(settings, now_utc)
+            if month_close_message:
+                user_id, text, job_type, period_key = month_close_message
+                await _send_if_due(application, AutomationMessage(user_id, text, job_type, period_key))
     except Exception:
         logger.exception("Automation scheduler tick failed.")
 

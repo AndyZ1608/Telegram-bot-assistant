@@ -20,6 +20,7 @@ from services.accounting_service import (
     list_jars,
     set_income,
 )
+from services.month_close_service import MonthAlreadyClosedError, is_month_closed
 
 
 JAR_DEFINITIONS: dict[str, str] = {
@@ -153,6 +154,8 @@ async def get_jars_overview(user_id: int) -> JarsOverview:
 
 async def add_jars_expense(user_id: int, code: str, amount: float, note: str | None) -> JarAllocation:
     normalized = normalize_jar_code(code)
+    if await is_month_closed(user_id):
+        raise MonthAlreadyClosedError("Current month is already closed.")
     try:
         await add_expense(user_id, normalized, amount, note)
     except JarNotFoundError:
