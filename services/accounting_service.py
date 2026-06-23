@@ -122,6 +122,7 @@ async def ensure_user(telegram_user_id: int, username: str | None, full_name: st
         else:
             user.username = username
             user.full_name = full_name
+            user.updated_at = datetime.utcnow()
         return user
 
 
@@ -432,7 +433,7 @@ async def get_weekly_spending_by_jar(user_id: int) -> list[JarStatus]:
         ]
 
 
-async def export_expenses_csv(user_id: int) -> tuple[str, bytes]:
+async def export_expenses_csv(user_id: int, export_owner_id: int | None = None) -> tuple[str, bytes]:
     month, year = current_month_year()
     start, end = _month_bounds(month, year)
     async with get_session() as session:
@@ -461,5 +462,5 @@ async def export_expenses_csv(user_id: int) -> tuple[str, bytes]:
             expense.note or "",
         ])
 
-    filename = f"expenses_{year}_{month:02d}.csv"
+    filename = f"expenses_{export_owner_id or user_id}_{year}_{month:02d}.csv"
     return filename, ("\ufeff" + output.getvalue()).encode("utf-8")

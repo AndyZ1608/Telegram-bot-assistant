@@ -54,6 +54,7 @@ PHUQUY_SILVER_TIMEOUT: float = float(os.getenv('PHUQUY_SILVER_TIMEOUT', '10'))
 STARTUP_NEWS_PROVIDER: str = os.getenv('STARTUP_NEWS_PROVIDER', 'mock').lower()
 STARTUP_CACHE_TTL_MINUTES: int = int(os.getenv('STARTUP_CACHE_TTL_MINUTES', '60'))
 ENABLE_SCHEDULER: bool = os.getenv('ENABLE_SCHEDULER', 'true').lower() in {'1', 'true', 'yes', 'on'}
+OWNER_TELEGRAM_USER_ID: str = os.getenv('OWNER_TELEGRAM_USER_ID', '').strip()
 
 # Rate limiting
 RATE_LIMIT_MESSAGES: int = int(os.getenv('RATE_LIMIT_MESSAGES', '20'))

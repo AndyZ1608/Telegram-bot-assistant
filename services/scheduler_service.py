@@ -80,8 +80,8 @@ async def poll_automation_jobs(application) -> None:
         for settings in await list_auto_month_close_settings():
             month_close_message = await due_auto_month_close(settings, now_utc)
             if month_close_message:
-                user_id, text, job_type, period_key = month_close_message
-                await _send_if_due(application, AutomationMessage(user_id, text, job_type, period_key))
+                user_id, telegram_user_id, text, job_type, period_key = month_close_message
+                await _send_if_due(application, AutomationMessage(user_id, telegram_user_id, text, job_type, period_key))
     except Exception:
         logger.exception("Automation scheduler tick failed.")
 
@@ -90,7 +90,7 @@ async def _send_if_due(application, message: AutomationMessage | None) -> None:
     if message is None:
         return
     try:
-        await application.bot.send_message(chat_id=message.user_id, text=message.text)
+        await application.bot.send_message(chat_id=message.telegram_user_id, text=message.text)
         await mark_sent(message.user_id, message.job_type, message.period_key)
     except Exception:
         logger.exception(

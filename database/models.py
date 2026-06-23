@@ -21,6 +21,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
+    ForeignKey,
     Integer,
     String,
     Text,
@@ -44,6 +45,9 @@ class User(Base):
     username: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     full_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
     def __repr__(self) -> str:
         return (
@@ -61,7 +65,7 @@ class MonthlyIncome(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
@@ -89,7 +93,7 @@ class BudgetJar(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String, nullable=False)
@@ -112,7 +116,7 @@ class Expense(Base):
     __tablename__ = "expenses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     jar_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     note: Mapped[Optional[str]] = mapped_column(String, nullable=True)
@@ -135,7 +139,7 @@ class Watchlist(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     symbol: Mapped[str] = mapped_column(String, nullable=False)
     market: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -153,7 +157,7 @@ class PriceAlert(Base):
     __tablename__ = "price_alerts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     symbol: Mapped[str] = mapped_column(String, nullable=False, index=True)
     condition_type: Mapped[str] = mapped_column(String, nullable=False)
     target_price: Mapped[float] = mapped_column(Float, nullable=False)
@@ -175,7 +179,7 @@ class Portfolio(Base):
     __tablename__ = "portfolio"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     symbol: Mapped[str] = mapped_column(String, nullable=False, index=True)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     buy_price: Mapped[float] = mapped_column(Float, nullable=False)
@@ -217,7 +221,7 @@ class UserSettings(Base):
     __tablename__ = "user_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
     timezone: Mapped[str] = mapped_column(String, default="Asia/Ho_Chi_Minh", nullable=False)
     daily_reminder_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     daily_reminder_time: Mapped[str] = mapped_column(String, default="21:00", nullable=False)
@@ -247,7 +251,7 @@ class AutomationLog(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     job_type: Mapped[str] = mapped_column(String, nullable=False)
     period_key: Mapped[str] = mapped_column(String, nullable=False)
     sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -265,7 +269,7 @@ class JarsSettings(Base):
     __tablename__ = "jars_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
     preset: Mapped[str] = mapped_column(String, default="default", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[Optional[datetime]] = mapped_column(
@@ -285,7 +289,7 @@ class MonthlyClosure(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     income_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
@@ -303,7 +307,7 @@ class MonthlyRolloverDetail(Base):
     __tablename__ = "monthly_rollover_details"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    closure_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    closure_id: Mapped[int] = mapped_column(Integer, ForeignKey("monthly_closures.id"), nullable=False, index=True)
     jar_code: Mapped[str] = mapped_column(String, nullable=False)
     budget_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     spent_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
@@ -317,7 +321,7 @@ class MonthCloseSettings(Base):
     __tablename__ = "month_close_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True, nullable=False, index=True)
     auto_month_close_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     auto_month_close_time: Mapped[str] = mapped_column(String, default="23:50", nullable=False)
     timezone: Mapped[str] = mapped_column(String, default="Asia/Ho_Chi_Minh", nullable=False)
@@ -333,7 +337,7 @@ class Settings(Base):
     __tablename__ = "settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
     currency: Mapped[str] = mapped_column(String, default="VND")
     timezone: Mapped[str] = mapped_column(String, default="Asia/Ho_Chi_Minh")
     reminder_enabled: Mapped[bool] = mapped_column(Boolean, default=True)

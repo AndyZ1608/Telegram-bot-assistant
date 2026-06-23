@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 import config
 from database.db import get_session
-from database.models import AutomationLog, UserSettings
+from database.models import AutomationLog, User, UserSettings
 from services.accounting_service import MissingIncomeError, get_monthly_summary
 from services.investment_service import check_price_alerts
 from services.startup_news import build_startup_digest
@@ -38,9 +38,25 @@ class InvalidDayError(ReminderError):
 @dataclass(frozen=True)
 class AutomationMessage:
     user_id: int
+    telegram_user_id: int
     text: str
     job_type: str
     period_key: str
+
+
+async def get_telegram_user_id(user_id: int) -> int | None:
+    async with get_session() as session:
+        result = await session.execute(
+            select(User.telegram_user_id).where(User.id == user_id)
+        )
+        return result.scalar_one_or_none()
+
+
+async def _automation_message(user_id: int, text: str, job_type: str, period_key: str) -> AutomationMessage | None:
+    telegram_user_id = await get_telegram_user_id(user_id)
+    if telegram_user_id is None:
+        return None
+    return AutomationMessage(user_id, telegram_user_id, text, job_type, period_key)
 
 
 def validate_time(value: str) -> str:
@@ -159,11 +175,11 @@ async def due_daily_reminder(settings: UserSettings, now_utc: datetime) -> Autom
     period_key = local_now.date().isoformat()
     if await already_sent(settings.user_id, "daily_reminder", period_key):
         return None
-    return AutomationMessage(
-        user_id=settings.user_id,
-        text="Bạn đã ghi chi tiêu hôm nay chưa?",
-        job_type="daily_reminder",
-        period_key=period_key,
+    return await _automation_message(
+        settings.user_id,
+        "Bạn đã ghi chi tiêu hôm nay chưa?",
+        "daily_reminder",
+        period_key,
     )
 
 
@@ -188,7 +204,7 @@ async def due_monthly_report(settings: UserSettings, now_utc: datetime) -> Autom
         ])
     except MissingIncomeError:
         text = "Monthly report: tháng này chưa có income để lập báo cáo."
-    return AutomationMessage(settings.user_id, text, "monthly_report", period_key)
+    return await _automation_message(settings.user_id, text, "monthly_report", period_key)
 
 
 async def due_startup_digest(settings: UserSettings, now_utc: datetime) -> AutomationMessage | None:
@@ -211,7 +227,7 @@ async def due_startup_digest(settings: UserSettings, now_utc: datetime) -> Autom
     ]
     lines.extend(f"- {item.get('title', 'chưa có tiêu đề')}" for item in digest["news"][:5])
     lines.append(f"Trend: {digest['trend']}")
-    return AutomationMessage(settings.user_id, "\n".join(lines), "startup_digest", period_key)
+    return await _automation_message(settings.user_id, "\n".join(lines), "startup_digest", period_key)
 
 
 async def due_price_alerts(settings: UserSettings) -> list[AutomationMessage]:
@@ -231,7 +247,9 @@ async def due_price_alerts(settings: UserSettings) -> list[AutomationMessage]:
             f"Condition: {result.condition_type} {format_currency(result.target_price)}\n"
             "Không phải khuyến nghị đầu tư."
         )
-        messages.append(AutomationMessage(settings.user_id, text, "price_alert", period_key))
+        message = await _automation_message(settings.user_id, text, "price_alert", period_key)
+        if message is not None:
+            messages.append(message)
     return messages
 
 

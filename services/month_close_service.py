@@ -20,6 +20,7 @@ from services.accounting_service import (
     get_income_for_month,
     list_jars,
 )
+from services.reminder_service import get_telegram_user_id
 
 
 ROLLOVER_SOURCE_JARS = ["NEC", "FFA", "EDU", "PLAY", "GIVE"]
@@ -334,8 +335,12 @@ async def due_auto_month_close(settings: MonthCloseSettings, now_utc: datetime):
         preview = await confirm_month_close(settings.user_id)
     except MonthAlreadyClosedError:
         return None
+    telegram_user_id = await get_telegram_user_id(settings.user_id)
+    if telegram_user_id is None:
+        return None
     return (
         settings.user_id,
+        telegram_user_id,
         "\n".join([
             f"Tự động chốt tháng {preview.month:02d}/{preview.year}.",
             f"Rollover vào LTS: {_format_vnd(preview.rollover_to_lts)}",

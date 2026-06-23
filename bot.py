@@ -224,8 +224,15 @@ async def _telegram_user_id(update: Update) -> int:
     if user is None:
         raise RuntimeError("Cannot identify Telegram user.")
     full_name = " ".join(part for part in [user.first_name, user.last_name] if part)
-    await ensure_user(user.id, user.username, full_name or None)
-    await get_or_create_user_settings(user.id)
+    db_user = await ensure_user(user.id, user.username, full_name or None)
+    await get_or_create_user_settings(db_user.id)
+    return db_user.id
+
+
+def _telegram_chat_user_id(update: Update) -> int:
+    user = update.effective_user
+    if user is None:
+        raise RuntimeError("Cannot identify Telegram user.")
     return user.id
 
 
@@ -1704,7 +1711,7 @@ async def price_alert_setting_command(update: Update, context: ContextTypes.DEFA
 async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = await _telegram_user_id(update)
     try:
-        filename, content = await export_expenses_csv(user_id)
+        filename, content = await export_expenses_csv(user_id, _telegram_chat_user_id(update))
     except NoExportDataError:
         await _message(update).reply_text("Export không có dữ liệu. Hãy ghi expense trước.")
         return
