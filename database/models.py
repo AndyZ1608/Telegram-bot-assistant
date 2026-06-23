@@ -242,6 +242,28 @@ class UserSettings(Base):
         )
 
 
+class UserParserAlias(Base):
+    """Per-user learned phrase mapping for the finance parser."""
+
+    __tablename__ = "user_parser_aliases"
+    __table_args__ = (
+        UniqueConstraint("user_id", "phrase", name="uq_parser_alias_user_phrase"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    phrase: Mapped[str] = mapped_column(String, nullable=False)
+    jar_code: Mapped[str] = mapped_column(String, nullable=False)
+    category: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return (
+            f"<UserParserAlias(user_id={self.user_id}, phrase={self.phrase!r}, "
+            f"jar={self.jar_code!r}, category={self.category!r})>"
+        )
+
+
 class AutomationLog(Base):
     """Sent automation record used to avoid duplicate reminders."""
 

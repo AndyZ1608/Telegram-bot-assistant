@@ -1,0 +1,41 @@
+{
+  "rules": [
+    {"jar":"NEC","category":"Ăn uống thiết yếu","transaction_type":"expense","priority":70,"keywords":["ăn sáng","ăn trưa","ăn tối","cơm","phở","bún","mì","bánh mì","đi chợ","siêu thị","tạp hóa","rau","củ","quả","thịt","cá","trứng","gạo","sữa","nước uống","dầu ăn","nước mắm","gia vị","đồ ăn","thực phẩm","đồ khô","thức ăn","nấu ăn","mua đồ ăn","cafe","cà phê","cafe sáng","cà phê sáng","cafe thường ngày"],"aliases":[],"negative_keywords":["nhà hàng","buffet","hẹn hò","cafe chill","cà phê chill","với bạn","người yêu"]},
+    {"jar":"NEC","category":"Nhà thuê","transaction_type":"expense","priority":90,"keywords":["tiền nhà","tiền phòng","thuê nhà","thuê phòng","nhà trọ","chung cư","phí quản lý","phí dịch vụ","tiền cọc nhà"],"aliases":[],"negative_keywords":[]},
+    {"jar":"NEC","category":"Hóa đơn","transaction_type":"expense","priority":85,"keywords":["tiền điện","tiền nước","điện nước","internet","wifi","tiền mạng","điện thoại","sim","data","4g","5g","gas","truyền hình"],"aliases":[],"negative_keywords":[]},
+    {"jar":"NEC","category":"Di chuyển","transaction_type":"expense","priority":85,"keywords":["xăng","đổ xăng","gửi xe","vé xe","xe bus","grab đi làm","sửa xe","vá xe","thay dầu","thay nhớt","bảo dưỡng xe","rửa xe","thay lốp","phụ tùng xe","phí cầu đường"],"aliases":[],"negative_keywords":[]},
+    {"jar":"NEC","category":"Y tế","transaction_type":"expense","priority":85,"keywords":["thuốc","khám bệnh","khám sức khỏe","bệnh viện","nha khoa","xét nghiệm","tiêm","bảo hiểm y tế","kính thuốc","vật lý trị liệu"],"aliases":[],"negative_keywords":[]},
+    {"jar":"NEC","category":"Sinh hoạt thiết yếu","transaction_type":"expense","priority":65,"keywords":["giấy vệ sinh","nước giặt","bột giặt","nước rửa chén","dầu gội","sữa tắm","kem đánh răng","đồ vệ sinh","đồ dùng gia đình","đồ bếp","sửa điện","sửa nước"],"aliases":[],"negative_keywords":[]},
+    {"jar":"NEC","category":"Nghĩa vụ","transaction_type":"expense","priority":80,"keywords":["trả nợ","trả góp","bảo hiểm","phí ngân hàng","thuế","phí hành chính","tiền phạt"],"aliases":[],"negative_keywords":[]},
+
+    {"jar":"FFA","category":"Cổ phiếu","transaction_type":"allocation","priority":100,"keywords":["cổ phiếu","chứng khoán","mua FPT","mua HPG","mua VNM","mua mã","nạp tài khoản chứng khoán","margin"],"aliases":[],"negative_keywords":[]},
+    {"jar":"FFA","category":"Quỹ đầu tư","transaction_type":"allocation","priority":90,"keywords":["etf","chứng chỉ quỹ","quỹ mở","quỹ đầu tư","trái phiếu"],"aliases":[],"negative_keywords":[]},
+    {"jar":"FFA","category":"Vàng đầu tư","transaction_type":"allocation","priority":95,"keywords":["mua vàng đầu tư","vàng miếng","vàng tích sản"],"aliases":[],"negative_keywords":["trang sức","dây chuyền","nhẫn cưới"]},
+    {"jar":"FFA","category":"Crypto","transaction_type":"allocation","priority":90,"keywords":["bitcoin","btc","ethereum","eth","crypto","tiền số"],"aliases":[],"negative_keywords":[]},
+    {"jar":"FFA","category":"Kinh doanh/tài sản","transaction_type":"allocation","priority":80,"keywords":["góp vốn","vốn kinh doanh","tái đầu tư","tài sản sinh lời","thu nhập thụ động","đầu tư bất động sản","đầu tư"],"aliases":[],"negative_keywords":[]},
+
+    {"jar":"LTS","category":"Quỹ dự phòng","transaction_type":"allocation","priority":100,"keywords":["quỹ dự phòng","emergency fund","tiền khẩn cấp","dự phòng thất nghiệp","dự phòng y tế"],"aliases":[],"negative_keywords":[]},
+    {"jar":"LTS","category":"Tiết kiệm","transaction_type":"allocation","priority":95,"keywords":["tiết kiệm","gửi tiết kiệm","sổ tiết kiệm","gửi ngân hàng","tích lũy","để dành"],"aliases":[],"negative_keywords":[]},
+    {"jar":"LTS","category":"Mục tiêu dài hạn","transaction_type":"allocation","priority":80,"keywords":["mua nhà","mua xe","cưới","lập gia đình","sinh con","du học","nghỉ hưu","mục tiêu dài hạn"],"aliases":[],"negative_keywords":[]},
+    {"jar":"LTS","category":"Quỹ sửa chữa/thay thế","transaction_type":"allocation","priority":75,"keywords":["quỹ sửa xe","quỹ sửa nhà","đổi điện thoại","mua laptop","thay đồ gia dụng"],"aliases":[],"negative_keywords":["để học","giải trí"]},
+
+    {"jar":"EDU","category":"Sách/tài liệu","transaction_type":"expense","priority":80,"keywords":["sách","ebook","tài liệu","giáo trình","tài liệu học"],"aliases":[],"negative_keywords":[]},
+    {"jar":"EDU","category":"Khóa học","transaction_type":"expense","priority":90,"keywords":["khóa học","học online","udemy","coursera","học tiếng anh","học ngoại ngữ","lớp học","gia sư"],"aliases":[],"negative_keywords":[]},
+    {"jar":"EDU","category":"Chứng chỉ","transaction_type":"expense","priority":90,"keywords":["lệ phí thi","chứng chỉ","exam","pmp","ccna","ccnp","aws","azure","security","network"],"aliases":[],"negative_keywords":[]},
+    {"jar":"EDU","category":"Lab/công cụ học tập","transaction_type":"expense","priority":85,"keywords":["lab","server lab","cloud lab","phần mềm học","license học tập","domain học tập","hosting học tập","laptop để học"],"aliases":[],"negative_keywords":[]},
+    {"jar":"EDU","category":"Hội thảo","transaction_type":"expense","priority":75,"keywords":["workshop","seminar","hội thảo","conference","mentor"],"aliases":[],"negative_keywords":[]},
+
+    {"jar":"PLAY","category":"Hẹn hò","transaction_type":"expense","priority":100,"keywords":["hẹn hò","người yêu","đi chơi với người yêu","ăn tối với người yêu","quà người yêu"],"aliases":[],"negative_keywords":[]},
+    {"jar":"PLAY","category":"Bạn bè","transaction_type":"expense","priority":85,"keywords":["đi chơi bạn bè","tụ tập","nhậu","liên hoan","karaoke","ăn với bạn","ăn với bạn bè","ăn tối với bạn bè","cafe với bạn","cafe với bạn bè"],"aliases":[],"negative_keywords":[]},
+    {"jar":"PLAY","category":"Ăn ngoài/đồ uống giải trí","transaction_type":"expense","priority":85,"keywords":["ăn nhà hàng","buffet","trà sữa","cafe chill","đồ uống","đồ ăn vặt","ăn đêm"],"aliases":[],"negative_keywords":[]},
+    {"jar":"PLAY","category":"Giải trí","transaction_type":"expense","priority":80,"keywords":["xem phim","netflix","spotify","youtube premium","game","nạp game","vé concert","vé sự kiện","khu vui chơi"],"aliases":[],"negative_keywords":[]},
+    {"jar":"PLAY","category":"Thể thao/sở thích","transaction_type":"expense","priority":80,"keywords":["gym","phòng gym","đá bóng","cầu lông","bơi","tennis","pickleball","chạy bộ","dụng cụ thể thao","thuê sân"],"aliases":[],"negative_keywords":[]},
+    {"jar":"PLAY","category":"Du lịch","transaction_type":"expense","priority":85,"keywords":["du lịch","khách sạn","vé máy bay","resort","homestay","đi phượt","tham quan"],"aliases":[],"negative_keywords":[]},
+    {"jar":"PLAY","category":"Mua sắm không thiết yếu","transaction_type":"expense","priority":70,"keywords":["quần áo đẹp","giày mới","đồng hồ","nước hoa","mỹ phẩm","đồ công nghệ","tai nghe","phụ kiện","đồ trang trí","mua đồ"],"aliases":[],"negative_keywords":["đồ ăn","đồ sinh hoạt"]},
+
+    {"jar":"GIVE","category":"Gia đình","transaction_type":"expense","priority":90,"keywords":["gửi bố mẹ","gửi mẹ","gửi bố","biếu bố mẹ","hỗ trợ gia đình","cho em","cho anh chị"],"aliases":[],"negative_keywords":[]},
+    {"jar":"GIVE","category":"Quà tặng","transaction_type":"expense","priority":85,"keywords":["tặng quà","quà sinh nhật","quà cưới","mừng cưới","mừng tuổi","lì xì","quà đồng nghiệp"],"aliases":[],"negative_keywords":["người yêu"]},
+    {"jar":"GIVE","category":"Từ thiện","transaction_type":"expense","priority":90,"keywords":["từ thiện","quyên góp","ủng hộ","cứu trợ","giúp người khó khăn"],"aliases":[],"negative_keywords":[]},
+    {"jar":"GIVE","category":"Cộng đồng/tôn giáo","transaction_type":"expense","priority":75,"keywords":["ủng hộ cộng đồng","quỹ lớp","quỹ công ty","đóng góp","công đức"],"aliases":[],"negative_keywords":[]}
+  ]
+}

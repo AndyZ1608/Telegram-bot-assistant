@@ -89,6 +89,7 @@ from services.month_close_service import (
     update_month_close_auto,
 )
 from services.market_data import get_stock_provider
+from services.parser_alias_service import list_user_parser_aliases, upsert_user_parser_alias
 from services.reminder_service import (
     InvalidDayError,
     InvalidTimeError,
@@ -112,7 +113,8 @@ from utils.formatter import format_currency, format_gold_k
 from utils.parser import (
     detect_intent,
     normalize_jar_name,
-    parse_jars_expense,
+    parse_alias_learning,
+    parse_finance_message,
     parse_vietnamese_amount,
 )
 from utils.validators import validate_amount, validate_jar_name, validate_symbol
@@ -125,7 +127,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-PENDING_JARS_TRANSACTIONS: dict[int, dict] = {}
+PENDING_JARS_CONTEXT_KEY = "pending_jars_transaction"
 JAR_SELECTION_ALIASES = {
     "1": "NEC",
     "2": "FFA",
@@ -513,14 +515,12 @@ def _format_jars_expense_result(
     elif jar.usage_percent > 80:
         warning = "\nCảnh báo: lọ này đã dùng trên 80% ngân sách."
     return (
-        f"Đã ghi: {_format_vnd(amount)}\n"
-        f"Lọ: {jar.code} - {jar.name}\n"
-        f"Category: {category_text}\n"
-        f"Ghi chú: {note_text}\n\n"
-        f"{jar.code} tháng này:\n"
-        f"Đã dùng: {_format_vnd(jar.spent)} / {_format_vnd(jar.budget)} "
-        f"({_format_jars_percent(jar.usage_percent)})\n"
-        f"Còn lại: {_format_vnd(jar.remaining)}"
+        f"✅ Đã ghi {_format_vnd(amount)}\n\n"
+        f"Hũ: {jar.code} - {jar.name}\n"
+        f"Danh mục: {category_text}\n"
+        f"Nội dung: {note_text}\n\n"
+        f"{jar.code} còn: {_format_vnd(jar.remaining)}\n"
+        f"Đã dùng: {_format_jars_percent(jar.usage_percent)}"
         f"{warning}"
     )
 
@@ -596,7 +596,35 @@ def _resolve_jar_selection(text: str) -> str | None:
     return JAR_SELECTION_ALIASES.get(raw)
 
 
+def _get_pending_jars_transaction(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
+    return context.user_data.get(PENDING_JARS_CONTEXT_KEY)
+
+
+def _set_pending_jars_transaction(context: ContextTypes.DEFAULT_TYPE, pending: dict) -> None:
+    context.user_data[PENDING_JARS_CONTEXT_KEY] = pending
+
+
+def _pop_pending_jars_transaction(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
+    return context.user_data.pop(PENDING_JARS_CONTEXT_KEY, None)
+
+
+def _pending_choice_from_text(pending: dict, text: str) -> dict | None:
+    raw = (text or "").strip().upper()
+    choices = pending.get("choices") or []
+    if raw.isdigit():
+        index = int(raw) - 1
+        if 0 <= index < len(choices):
+            return choices[index]
+    for choice in choices:
+        if raw == (choice.get("jar") or "").upper():
+            return choice
+    return None
+
+
 def _pending_subcategory(pending: dict, jar_code: str) -> str:
+    for choice in pending.get("choices") or []:
+        if (choice.get("jar") or "").upper() == jar_code:
+            return choice.get("category") or JARS_DEFAULT_SUBCATEGORY.get(jar_code, "Khác")
     candidates = pending.get("category_candidates") or {}
     return candidates.get(jar_code) or JARS_DEFAULT_SUBCATEGORY.get(jar_code, "Khác")
 
@@ -604,6 +632,29 @@ def _pending_subcategory(pending: dict, jar_code: str) -> str:
 def _format_pending_jars_question(parsed: dict) -> str:
     amount = parsed.get("amount")
     note = parsed.get("note") or "-"
+    choices = parsed.get("choices") or parsed.get("candidates") or []
+    if not choices:
+        category_candidates = parsed.get("category_candidates") or {}
+        choices = [
+            {"jar": jar, "category": category}
+            for jar, category in category_candidates.items()
+        ]
+    if choices:
+        lines = [
+            "Tôi chưa chắc khoản này thuộc hũ nào:",
+            "",
+        ]
+        for index, choice in enumerate(choices[:3], start=1):
+            jar = (choice.get("jar") or "").upper()
+            category = choice.get("category") or JARS_DEFAULT_SUBCATEGORY.get(jar, "Khác")
+            lines.append(f"{index}. {jar} - {category}")
+        lines.extend([
+            "",
+            f"Số tiền: {_format_vnd(amount)}",
+            f"Nội dung: {note}",
+            "Trả lời 1, 2, 3 hoặc mã hũ. Dùng /cancel để hủy.",
+        ])
+        return "\n".join(lines)
     lines = [
         "Khoản này thuộc lọ nào?",
         "",
@@ -764,17 +815,30 @@ async def dailybudget_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def parse_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _telegram_user_id(update)
+    user_id = await _telegram_user_id(update)
     text = _args_text(context)
     if not text:
         await _message(update).reply_text("Sai cú pháp. Ví dụ: /parse đi chơi với người yêu 500k")
         return
-    await _message(update).reply_text(_format_parse_result(parse_jars_expense(text)))
+    parsed = parse_finance_message(text, await list_user_parser_aliases(user_id))
+    transaction = (parsed.get("transactions") or [{}])[0]
+    debug = {
+        "amount": transaction.get("amount"),
+        "category": transaction.get("jar"),
+        "subcategory": transaction.get("category"),
+        "note": transaction.get("note"),
+        "confidence": transaction.get("confidence"),
+        "category_candidates": {
+            choice["jar"]: choice["category"]
+            for choice in transaction.get("candidates") or []
+        },
+    }
+    await _message(update).reply_text(_format_parse_result(debug))
 
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = await _telegram_user_id(update)
-    if PENDING_JARS_TRANSACTIONS.pop(user_id, None):
+    if _pop_pending_jars_transaction(context):
         await _message(update).reply_text("Đã hủy khoản chi đang chờ phân loại.")
         return
     await _message(update).reply_text("Không có khoản chi nào đang chờ phân loại.")
@@ -1727,23 +1791,108 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user_id = await _telegram_user_id(update)
     text = (_message(update).text or "").strip()
 
-    if user_id in PENDING_JARS_TRANSACTIONS:
-        jar_code = _resolve_jar_selection(text)
+    pending = _get_pending_jars_transaction(context)
+    if pending:
+        selected_choice = _pending_choice_from_text(pending, text)
+        jar_code = (selected_choice.get("jar") if selected_choice else None) or _resolve_jar_selection(text)
         if jar_code is None:
             await _message(update).reply_text(
                 "Mình đang chờ bạn chọn lọ cho khoản chi trước đó. "
-                "Trả lời NEC/FFA/LTS/EDU/PLAY/GIVE hoặc số 1-6. Dùng /cancel để hủy."
+                "Trả lời số trong danh sách, NEC/FFA/LTS/EDU/PLAY/GIVE hoặc /cancel để hủy."
             )
             return
-        pending = PENDING_JARS_TRANSACTIONS.pop(user_id)
+        _pop_pending_jars_transaction(context)
         await _record_jars_expense(
             update,
             user_id,
             jar_code,
             pending["amount"],
             pending.get("note"),
-            _pending_subcategory(pending, jar_code),
+            (selected_choice or {}).get("category") or _pending_subcategory(pending, jar_code),
         )
+        return
+
+    alias_instruction = parse_alias_learning(text)
+    if alias_instruction:
+        try:
+            jar_code = normalize_jar_code(alias_instruction["jar_code"])
+        except InvalidJarCodeError:
+            await _message(update).reply_text(
+                f"Hũ không hợp lệ. Chỉ dùng 6 mã: {', '.join(JAR_ORDER)}."
+            )
+            return
+        alias = await upsert_user_parser_alias(
+            user_id,
+            alias_instruction["phrase"],
+            jar_code,
+            alias_instruction["category"],
+        )
+        await _message(update).reply_text(
+            f"Đã học alias riêng của bạn:\n"
+            f"\"{alias.phrase}\" -> {alias.jar_code} - {alias.category}"
+        )
+        return
+
+    finance_parse = parse_finance_message(
+        text,
+        await list_user_parser_aliases(user_id),
+    )
+    finance_transactions = finance_parse.get("transactions") or []
+    if finance_parse.get("intent") == "finance_transactions" and finance_transactions:
+        ambiguous = next(
+            (
+                item for item in finance_transactions
+                if item.get("transaction_type") != "income"
+                and (item.get("confidence") != "HIGH" or not item.get("jar"))
+            ),
+            None,
+        )
+        if ambiguous:
+            amount = ambiguous.get("amount")
+            error = _validate_amount_for_reply(amount)
+            if error:
+                await _message(update).reply_text(
+                    f"Mình chưa đọc được số tiền. Ví dụ: ăn sáng 50k\n{error}"
+                )
+                return
+            pending = {
+                "amount": amount,
+                "note": ambiguous.get("note"),
+                "category_candidates": {
+                    choice["jar"]: choice["category"]
+                    for choice in ambiguous.get("candidates") or []
+                },
+                "choices": ambiguous.get("candidates") or [],
+            }
+            _set_pending_jars_transaction(context, pending)
+            await _message(update).reply_text(_format_pending_jars_question(pending))
+            return
+
+        for transaction in finance_transactions:
+            amount = transaction.get("amount")
+            error = _validate_amount_for_reply(amount)
+            if error:
+                await _message(update).reply_text(
+                    f"Mình chưa đọc được số tiền. Ví dụ: ăn sáng 50k\n{error}"
+                )
+                return
+            if transaction.get("transaction_type") == "income":
+                overview = await allocate_income(user_id, amount)
+                await _message(update).reply_text(
+                    _format_jars_allocation(
+                        overview,
+                        f"Đã chia thu nhập tháng này: {_format_vnd(amount)}",
+                    )
+                )
+                continue
+            await _record_jars_expense(
+                update,
+                user_id,
+                normalize_jar_code(transaction.get("jar")),
+                amount,
+                transaction.get("note"),
+                transaction.get("category"),
+            )
         return
 
     intent = detect_intent(text)
@@ -1919,14 +2068,14 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             )
             return
         if intent.get("confidence") != "HIGH" or not intent.get("category"):
-            PENDING_JARS_TRANSACTIONS[user_id] = {
+            pending = {
                 "amount": amount,
                 "note": intent.get("note"),
                 "category_candidates": intent.get("category_candidates") or {},
+                "choices": intent.get("choices") or [],
             }
-            await _message(update).reply_text(
-                _format_pending_jars_question(intent)
-            )
+            _set_pending_jars_transaction(context, pending)
+            await _message(update).reply_text(_format_pending_jars_question(pending))
             return
         try:
             jar_code = normalize_jar_code(intent.get("category"))

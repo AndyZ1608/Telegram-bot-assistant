@@ -6,8 +6,11 @@ including amount parsing, intent detection, category classification,
 and jar name normalization.
 """
 
+import json
 import re
 import unicodedata
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -654,6 +657,479 @@ def _detect_jars_coaching_command(text: str) -> Optional[dict]:
     if normalized == 'bao cao 6 lo cuoi thang':
         return {'intent': 'monthly_jars_report'}
     return None
+
+
+# ---------------------------------------------------------------------------
+# Rule-based personal-finance parser
+# ---------------------------------------------------------------------------
+
+_RULES_PATH = Path(__file__).resolve().parents[1] / "data" / "finance_parser_rules.yaml"
+_JAR_DISPLAY_NAMES = {
+    "NEC": "Chi tiêu cần thiết",
+    "FFA": "Tự do tài chính",
+    "LTS": "Tiết kiệm dài hạn",
+    "EDU": "Giáo dục",
+    "PLAY": "Hưởng thụ",
+    "GIVE": "Cho đi",
+}
+_CONFIDENCE_HIGH = "HIGH"
+_CONFIDENCE_MEDIUM = "MEDIUM"
+_CONFIDENCE_LOW = "LOW"
+
+_INCOME_PHRASES = (
+    "thu nhập",
+    "lương",
+    "nhận lương",
+    "được trả lương",
+    "thưởng",
+    "bonus",
+    "hoàn tiền",
+    "refund",
+)
+_FINANCE_ACTION_PREFIXES = (
+    "chi",
+    "tiêu",
+    "mua",
+    "trả",
+    "đóng",
+    "thanh toán",
+    "nạp",
+    "chuyển",
+    "gửi",
+    "biếu",
+    "tặng",
+    "ủng hộ",
+    "đầu tư",
+    "tiết kiệm",
+    "nhận",
+    "được trả",
+    "lương",
+    "thưởng",
+    "hoàn tiền",
+    "hết",
+    "vào",
+)
+_AMOUNT_TOKEN_RE = re.compile(
+    r"""
+    (?P<formatted>(?<!\d)\d{1,3}(?:[.,]\d{3})+(?!\d))
+    |
+    (?P<tr_half>\b\d+\s*(?:tr|triệu)\s*rưỡi\b)
+    |
+    (?P<tr_tail>\b\d+\s*(?:tr|triệu)\s*\d{1,3}\b)
+    |
+    (?P<tr_decimal>\b\d+(?:[.,]\d+)?\s*(?:tr|triệu|củ)\b)
+    |
+    (?P<k>\b\d+(?:[.,]\d+)?\s*(?:k|nghìn|ngàn)\b)
+    |
+    (?P<ty>\b\d+(?:[.,]\d+)?\s*tỷ\b)
+    |
+    (?P<plain>(?<!\d)\d{4,}(?!\d))
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+@lru_cache(maxsize=1)
+def load_finance_parser_rules() -> list[dict]:
+    """Load finance parser rules from ``data/finance_parser_rules.yaml``.
+
+    The file intentionally uses JSON-compatible YAML so the parser does not
+    need an extra runtime dependency.
+    """
+    data = json.loads(_RULES_PATH.read_text(encoding="utf-8"))
+    return list(data.get("rules") or [])
+
+
+def get_finance_parser_rule_stats() -> dict:
+    rules = load_finance_parser_rules()
+    jars = {rule.get("jar") for rule in rules}
+    categories = {(rule.get("jar"), rule.get("category")) for rule in rules}
+    keyword_count = sum(len(rule.get("keywords") or []) for rule in rules)
+    alias_count = sum(len(rule.get("aliases") or []) for rule in rules)
+    negative_count = sum(len(rule.get("negative_keywords") or []) for rule in rules)
+    return {
+        "rules": len(rules),
+        "jars": len(jars),
+        "categories": len(categories),
+        "keywords": keyword_count,
+        "aliases": alias_count,
+        "negative_keywords": negative_count,
+    }
+
+
+def _parse_number_piece(raw: str) -> float | None:
+    cleaned = raw.strip().lower().replace(" ", "")
+    if not cleaned:
+        return None
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", cleaned):
+        return float(cleaned.replace(".", "").replace(",", ""))
+    if "," in cleaned and "." in cleaned:
+        cleaned = cleaned.replace(".", "").replace(",", ".")
+    elif "," in cleaned:
+        cleaned = cleaned.replace(",", ".")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return None
+
+
+def _tail_to_vnd(tail: str) -> float:
+    digits = re.sub(r"\D", "", tail)
+    if not digits:
+        return 0.0
+    value = int(digits)
+    if len(digits) == 1:
+        return value * 100_000
+    if len(digits) == 2:
+        return value * 10_000
+    return value * 1_000
+
+
+def _parse_amount_token(raw: str) -> float | None:
+    normalized = _text_lower(raw)
+    if re.fullmatch(r"\d{1,3}(?:[.,]\d{3})+", normalized):
+        return _parse_number_piece(normalized)
+
+    match = re.match(r"(\d+)\s*(?:tr|triệu)\s*rưỡi\b", normalized, re.IGNORECASE)
+    if match:
+        return int(match.group(1)) * 1_000_000 + 500_000
+
+    match = re.match(r"(\d+)\s*(?:tr|triệu)\s*(\d{1,3})\b", normalized, re.IGNORECASE)
+    if match:
+        return int(match.group(1)) * 1_000_000 + _tail_to_vnd(match.group(2))
+
+    match = re.match(r"(\d+(?:[.,]\d+)?)\s*(?:tr|triệu|củ)\b", normalized, re.IGNORECASE)
+    if match:
+        number = _parse_number_piece(match.group(1))
+        return None if number is None else number * 1_000_000
+
+    match = re.match(r"(\d+(?:[.,]\d+)?)\s*(?:k|nghìn|ngàn)\b", normalized, re.IGNORECASE)
+    if match:
+        number = _parse_number_piece(match.group(1))
+        return None if number is None else number * 1_000
+
+    match = re.match(r"(\d+(?:[.,]\d+)?)\s*tỷ\b", normalized, re.IGNORECASE)
+    if match:
+        number = _parse_number_piece(match.group(1))
+        return None if number is None else number * 1_000_000_000
+
+    return _parse_number_piece(normalized)
+
+
+def find_vietnamese_amounts(text: str) -> list[dict]:
+    """Return all VND amount tokens found in a sentence with spans."""
+    amounts: list[dict] = []
+    occupied: list[tuple[int, int]] = []
+    for match in _AMOUNT_TOKEN_RE.finditer(text or ""):
+        start, end = match.span()
+        if any(start < old_end and end > old_start for old_start, old_end in occupied):
+            continue
+        value = _parse_amount_token(match.group(0))
+        if value is None:
+            continue
+        amounts.append({"amount": float(value), "start": start, "end": end, "raw": match.group(0)})
+        occupied.append((start, end))
+    return sorted(amounts, key=lambda item: item["start"])
+
+
+def parse_vietnamese_amount(text: str) -> Optional[float]:
+    """Parse the first Vietnamese VND amount from natural text."""
+    amounts = find_vietnamese_amounts(text)
+    return amounts[0]["amount"] if amounts else None
+
+
+def _remove_amount_spans(text: str, spans: list[dict]) -> str:
+    if not spans:
+        return text.strip()
+    pieces = []
+    cursor = 0
+    for span in spans:
+        pieces.append(text[cursor:span["start"]])
+        cursor = span["end"]
+    pieces.append(text[cursor:])
+    return "".join(pieces).strip()
+
+
+def _clean_transaction_note(text: str, amount_spans: list[dict]) -> str:
+    note = _remove_amount_spans(text, amount_spans)
+    note = re.sub(r"\b(?:tháng này|hôm nay|vào|cho|khoản)\b", " ", note, flags=re.IGNORECASE)
+    changed = True
+    while changed:
+        changed = False
+        for prefix in sorted(_FINANCE_ACTION_PREFIXES, key=len, reverse=True):
+            pattern = rf"^\s*{re.escape(prefix)}\b\s*"
+            new_note = re.sub(pattern, "", note, flags=re.IGNORECASE).strip()
+            if new_note != note:
+                note = new_note
+                changed = True
+                break
+    note = re.sub(r"\s+", " ", note).strip(" ,.-")
+    return note or _remove_amount_spans(text, amount_spans) or text.strip()
+
+
+def _keyword_hit(normalized_text: str, keyword: str) -> bool:
+    keyword_norm = _normalize_for_match(keyword)
+    if not keyword_norm:
+        return False
+    if " " in keyword_norm:
+        return keyword_norm in normalized_text
+    return bool(re.search(rf"(?<!\w){re.escape(keyword_norm)}(?!\w)", normalized_text))
+
+
+def _user_alias_matches(text: str, user_aliases: list[dict] | None) -> list[dict]:
+    normalized = _normalize_for_match(text)
+    matches: list[dict] = []
+    for alias in user_aliases or []:
+        phrase = alias.get("phrase") or ""
+        if not phrase or not _keyword_hit(normalized, phrase):
+            continue
+        jar = (alias.get("jar_code") or alias.get("jar") or "").upper()
+        category = alias.get("category") or "Khác"
+        matches.append({
+            "jar": jar,
+            "category": category,
+            "transaction_type": alias.get("transaction_type") or ("allocation" if jar in {"FFA", "LTS"} else "expense"),
+            "keyword": phrase,
+            "score": 10_000 + len(_normalize_for_match(phrase)),
+            "source": "user_alias",
+        })
+    return matches
+
+
+def _rule_matches(text: str, user_aliases: list[dict] | None = None) -> list[dict]:
+    normalized = _normalize_for_match(text)
+    matches = _user_alias_matches(text, user_aliases)
+    for rule in load_finance_parser_rules():
+        negative_keywords = rule.get("negative_keywords") or []
+        if any(_keyword_hit(normalized, keyword) for keyword in negative_keywords):
+            continue
+        terms = list(rule.get("keywords") or []) + list(rule.get("aliases") or [])
+        for term in terms:
+            if not _keyword_hit(normalized, term):
+                continue
+            term_norm = _normalize_for_match(term)
+            matches.append({
+                "jar": rule.get("jar"),
+                "category": rule.get("category"),
+                "transaction_type": rule.get("transaction_type") or "expense",
+                "keyword": term,
+                "score": int(rule.get("priority") or 0) * 100 + len(term_norm),
+                "source": "rules",
+            })
+    if re.search(r"(?<!\w)mua\s+[A-Z]{2,10}(?!\w)", text or ""):
+        matches.append({
+            "jar": "FFA",
+            "category": "Cổ phiếu",
+            "transaction_type": "allocation",
+            "keyword": "mua <ticker>",
+            "score": 10_500,
+            "source": "ticker_pattern",
+        })
+    return sorted(matches, key=lambda item: item["score"], reverse=True)
+
+
+def _default_candidates() -> list[dict]:
+    return [
+        {"jar": "NEC", "category": "Sinh hoạt thiết yếu"},
+        {"jar": "PLAY", "category": "Mua sắm không thiết yếu"},
+        {"jar": "EDU", "category": "Lab/công cụ học tập"},
+    ]
+
+
+def _top_candidates(matches: list[dict], limit: int = 3) -> list[dict]:
+    seen: set[tuple[str, str]] = set()
+    candidates: list[dict] = []
+    for match in matches:
+        key = (match.get("jar") or "", match.get("category") or "")
+        if key in seen or not key[0]:
+            continue
+        seen.add(key)
+        candidates.append({
+            "jar": key[0],
+            "category": key[1] or "Khác",
+            "transaction_type": match.get("transaction_type") or "expense",
+        })
+        if len(candidates) >= limit:
+            break
+    if not candidates:
+        candidates = _default_candidates()
+    return candidates[:limit]
+
+
+def _is_income_text(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    return any(_keyword_hit(normalized, phrase) for phrase in _INCOME_PHRASES)
+
+
+def _is_expense_like_text(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if any(_keyword_hit(normalized, prefix) for prefix in _FINANCE_ACTION_PREFIXES):
+        return True
+    return bool(_rule_matches(text))
+
+
+def _transaction_from_segment(segment: str, user_aliases: list[dict] | None = None) -> dict:
+    amounts = find_vietnamese_amounts(segment)
+    amount = amounts[0]["amount"] if amounts else None
+    note = _clean_transaction_note(segment, amounts[:1]) if segment else ""
+
+    if amount is not None and _is_income_text(segment):
+        return {
+            "transaction_type": "income",
+            "amount": amount,
+            "jar": None,
+            "category": None,
+            "note": note,
+            "confidence": _CONFIDENCE_HIGH,
+            "candidates": [],
+            "reason": "income_keyword",
+        }
+
+    matches = _rule_matches(segment, user_aliases)
+    if amount is None:
+        return {
+            "transaction_type": "expense",
+            "amount": None,
+            "jar": matches[0]["jar"] if matches else None,
+            "category": matches[0]["category"] if matches else None,
+            "note": note or segment.strip(),
+            "confidence": _CONFIDENCE_LOW,
+            "candidates": _top_candidates(matches),
+            "reason": "missing_amount",
+        }
+    if not matches:
+        return {
+            "transaction_type": "expense",
+            "amount": amount,
+            "jar": None,
+            "category": None,
+            "note": note,
+            "confidence": _CONFIDENCE_LOW,
+            "candidates": _default_candidates(),
+            "reason": "unknown_category",
+        }
+
+    best = matches[0]
+    top_score = best["score"]
+    close_matches = [
+        match for match in matches
+        if top_score - match["score"] <= 500
+    ]
+    top_keys = {(match["jar"], match["category"]) for match in close_matches}
+    segment_norm = _normalize_for_match(segment)
+    generic_ambiguous = (
+        _keyword_hit(segment_norm, "mua đồ")
+        and not _keyword_hit(segment_norm, "mua đồ ăn")
+        and not _keyword_hit(segment_norm, "đồ sinh hoạt")
+    )
+    if len(top_keys) > 1 or generic_ambiguous:
+        return {
+            "transaction_type": best.get("transaction_type") or "expense",
+            "amount": amount,
+            "jar": None,
+            "category": None,
+            "note": note,
+            "confidence": _CONFIDENCE_MEDIUM,
+            "candidates": _default_candidates() if generic_ambiguous else _top_candidates(matches),
+            "reason": "ambiguous_category",
+        }
+
+    return {
+        "transaction_type": best.get("transaction_type") or "expense",
+        "amount": amount,
+        "jar": best.get("jar"),
+        "category": best.get("category"),
+        "note": note,
+        "confidence": _CONFIDENCE_HIGH,
+        "candidates": _top_candidates(matches),
+        "reason": "matched_keyword",
+        "matched_keyword": best.get("keyword"),
+        "match_source": best.get("source"),
+    }
+
+
+def _split_multi_transaction_text(text: str) -> list[str]:
+    amounts = find_vietnamese_amounts(text)
+    if len(amounts) <= 1:
+        return [text.strip()]
+    parts = [part.strip() for part in re.split(r"\s*[;\n,]\s*", text) if part.strip()]
+    amount_parts = [part for part in parts if find_vietnamese_amounts(part)]
+    if len(amount_parts) >= 2:
+        return amount_parts
+    return [text.strip()]
+
+
+def parse_finance_message(text: str, user_aliases: list[dict] | None = None) -> dict:
+    """Parse natural personal-finance messages into transaction objects."""
+    clean = (text or "").strip()
+    if not clean:
+        return {"intent": "unknown", "transactions": []}
+
+    if not find_vietnamese_amounts(clean) and not _is_expense_like_text(clean) and not _is_income_text(clean):
+        return {"intent": "unknown", "transactions": []}
+
+    transactions = [
+        _transaction_from_segment(segment, user_aliases)
+        for segment in _split_multi_transaction_text(clean)
+    ]
+    return {
+        "intent": "finance_transactions",
+        "transactions": transactions,
+        "confidence": min((item["confidence"] for item in transactions), default=_CONFIDENCE_LOW),
+        "is_multi": len(transactions) > 1,
+    }
+
+
+def parse_alias_learning(text: str) -> Optional[dict]:
+    """Parse user-defined category alias instructions."""
+    match = re.match(
+        r'^\s*từ\s+giờ\s+["“]?(.+?)["”]?\s+là\s+([A-Za-z]{3,4})\s*(?:-|–|—|:)?\s*(.+?)\s*$',
+        text or "",
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return {
+        "phrase": match.group(1).strip(),
+        "jar_code": match.group(2).upper().strip(),
+        "category": match.group(3).strip(),
+    }
+
+
+def parse_jars_expense(text: str) -> dict:
+    """Backwards-compatible wrapper around the rule-based finance parser."""
+    parsed = parse_finance_message(text)
+    transactions = parsed.get("transactions") or []
+    if not transactions:
+        return {
+            "intent": "expense",
+            "amount": None,
+            "note": text,
+            "category": None,
+            "subcategory": None,
+            "confidence": "LOW",
+            "category_candidates": {},
+            "choices": _default_candidates(),
+            "reason": "unknown",
+        }
+    first = transactions[0]
+    candidates = {
+        candidate["jar"]: candidate["category"]
+        for candidate in first.get("candidates") or []
+    }
+    return {
+        "intent": "expense",
+        "transaction_type": first.get("transaction_type") or "expense",
+        "amount": first.get("amount"),
+        "note": first.get("note"),
+        "category": first.get("jar"),
+        "subcategory": first.get("category"),
+        "confidence": first.get("confidence") or "LOW",
+        "category_candidates": candidates,
+        "choices": first.get("candidates") or [],
+        "reason": first.get("reason"),
+        "matched_keyword": first.get("matched_keyword"),
+    }
 
 
 def detect_intent(text: str) -> dict:
