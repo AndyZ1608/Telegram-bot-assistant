@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 import config
 from database.db import get_session
@@ -78,6 +78,7 @@ class MonthlySummary:
 class ExpenseView:
     id: int
     jar_name: str | None
+    category: str | None
     amount: float
     note: str | None
     transaction_date: date
@@ -275,6 +276,16 @@ async def list_jars(user_id: int, month: int | None = None, year: int | None = N
 
 
 async def add_expense(user_id: int, jar_name: str, amount: float, note: str | None) -> Expense:
+    return await add_expense_with_category(user_id, jar_name, amount, note, None)
+
+
+async def add_expense_with_category(
+    user_id: int,
+    jar_name: str,
+    amount: float,
+    note: str | None,
+    category: str | None = None,
+) -> Expense:
     month, year = current_month_year()
     async with get_session() as session:
         jar_result = await session.execute(
@@ -291,6 +302,7 @@ async def add_expense(user_id: int, jar_name: str, amount: float, note: str | No
         expense = Expense(
             user_id=user_id,
             jar_name=jar_name,
+            category=category,
             amount=amount,
             note=note,
             transaction_date=_today(),
@@ -325,6 +337,7 @@ async def list_expenses(user_id: int, period: str = "month") -> list[ExpenseView
             ExpenseView(
                 id=expense.id,
                 jar_name=expense.jar_name,
+                category=expense.category,
                 amount=float(expense.amount),
                 note=expense.note,
                 transaction_date=expense.transaction_date,
@@ -441,10 +454,23 @@ async def export_expenses_csv(user_id: int, export_owner_id: int | None = None) 
             select(Expense)
             .where(
                 Expense.user_id == user_id,
-                Expense.transaction_date >= start,
-                Expense.transaction_date < end,
+                or_(
+                    (
+                        (Expense.transaction_date >= start)
+                        & (Expense.transaction_date < end)
+                    ),
+                    (
+                        Expense.transaction_date.is_(None)
+                        & (func.date(Expense.created_at) >= start.isoformat())
+                        & (func.date(Expense.created_at) < end.isoformat())
+                    ),
+                ),
             )
-            .order_by(Expense.transaction_date, Expense.id)
+            .order_by(
+                func.coalesce(Expense.transaction_date, func.date(Expense.created_at)),
+                Expense.created_at,
+                Expense.id,
+            )
         )
         expenses = list(result.scalars().all())
 
@@ -453,11 +479,15 @@ async def export_expenses_csv(user_id: int, export_owner_id: int | None = None) 
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["date", "jar_name", "amount", "note"])
+    writer.writerow(["Ngày chi", "Hũ", "Danh mục", "Số tiền", "Ghi chú"])
     for expense in expenses:
+        expense_date = expense.transaction_date
+        if expense_date is None and expense.created_at is not None:
+            expense_date = expense.created_at.date()
         writer.writerow([
-            expense.transaction_date.isoformat(),
+            expense_date.strftime("%d/%m/%Y") if expense_date else "",
             expense.jar_name or "",
+            expense.category or "",
             f"{expense.amount:.0f}",
             expense.note or "",
         ])

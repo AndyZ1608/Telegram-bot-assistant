@@ -118,6 +118,7 @@ class Expense(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     jar_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     note: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     transaction_date: Mapped[date] = mapped_column(Date, nullable=False)

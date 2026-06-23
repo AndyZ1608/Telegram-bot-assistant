@@ -701,7 +701,7 @@ async def _record_jars_expense(
     subcategory: str | None,
 ) -> None:
     try:
-        jar = await add_jars_expense(user_id, jar_code, amount, note)
+        jar = await add_jars_expense(user_id, jar_code, amount, note, subcategory)
     except MonthAlreadyClosedError:
         await _message(update).reply_text(
             "Tháng này đã chốt. Không thể ghi thêm expense vào tháng đã closed."

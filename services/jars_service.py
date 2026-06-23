@@ -13,7 +13,7 @@ from database.db import get_session
 from database.models import JarsSettings
 from services.accounting_service import (
     JarNotFoundError,
-    add_expense,
+    add_expense_with_category,
     add_or_update_jar,
     get_income,
     get_monthly_summary,
@@ -152,15 +152,21 @@ async def get_jars_overview(user_id: int) -> JarsOverview:
     return JarsOverview(income=income, preset=preset, jars=jars)
 
 
-async def add_jars_expense(user_id: int, code: str, amount: float, note: str | None) -> JarAllocation:
+async def add_jars_expense(
+    user_id: int,
+    code: str,
+    amount: float,
+    note: str | None,
+    category: str | None = None,
+) -> JarAllocation:
     normalized = normalize_jar_code(code)
     if await is_month_closed(user_id):
         raise MonthAlreadyClosedError("Current month is already closed.")
     try:
-        await add_expense(user_id, normalized, amount, note)
+        await add_expense_with_category(user_id, normalized, amount, note, category)
     except JarNotFoundError:
         await init_jars(user_id)
-        await add_expense(user_id, normalized, amount, note)
+        await add_expense_with_category(user_id, normalized, amount, note, category)
     overview = await get_jars_overview(user_id)
     return next(jar for jar in overview.jars if jar.code == normalized)
 
